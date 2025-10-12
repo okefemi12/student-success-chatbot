@@ -159,16 +159,8 @@ Make sure this file is available when deploying (it’s included via `.dockerign
 * **Backend:** Flask (Python)
 * **Database:** Firestore (Firebase)
 * **Storage:** Cloudinary
-* **ML / AI:** Scikit-learn, LangChain, OpenAI, Gemini
+* **ML / AI:** Scikit-learn, LangChain, OpenAI, Gemini, XGBOOST Classifier
 * **OCR:** PyMuPDF, Pytesseract
 * **Deployment:** Render + Docker , Cloud(soon)
 
 
-
-
-```
-
----
-
-Would you like me to make a **Render-focused** version next (with `.env` examples and debugging tips for the “no open HTTP ports” issue)?
-```
