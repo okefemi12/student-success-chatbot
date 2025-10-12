@@ -1,0 +1,27 @@
+# Virtual environment
+venv/
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Build / cache
+*.egg-info/
+dist/
+build/
+
+# Firebase and private keys
+firebase_key.json
+*.json
+
+# Notebooks
+*.ipynb_checkpoints/

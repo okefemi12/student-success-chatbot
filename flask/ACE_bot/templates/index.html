@@ -1,0 +1,1443 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ACE — AI Study Assistant</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root { font-family: system-ui, sans-serif; color:#111; }
+    body { max-width:1200px; margin:18px auto; padding:16px; background:#f5f5f5; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; background:white; padding:16px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.1); }
+    h1 { margin:0; font-size:22px; color:#007cba; }
+    .grid { display:grid; grid-template-columns: 1fr 500px; gap:16px; align-items:start; }
+    section { border:1px solid #e6e6e6; padding:16px; border-radius:8px; background:#fff; box-shadow:0 2px 4px rgba(0,0,0,0.05); margin-bottom:12px; }
+    .hidden { display:none; }
+    label{font-size:13px;display:block;margin-top:10px;font-weight:500;color:#333;}
+    input, select, textarea { width:100%; padding:10px; margin-top:6px; box-sizing:border-box; border-radius:6px; border:1px solid #ddd; font-size:14px; }
+    button { padding:10px 16px; margin:6px 4px; border-radius:6px; cursor:pointer; border:none; background:#007cba; color:white; font-weight:500; transition:background 0.2s; }
+    button:hover { background:#005a8c; }
+    button:disabled { background:#ccc; cursor:not-allowed; }
+    .small { padding:6px 10px; font-size:13px; }
+    .danger { background:#ff6b6b; }
+    .danger:hover { background:#ff5252; }
+    .secondary { background:#6c757d; }
+    .secondary:hover { background:#5a6268; }
+    .success { background:#28a745; }
+    .success:hover { background:#218838; }
+    .chat-box { height:auto; display:flex; flex-direction:column; gap:8px; }
+    .messages { border:1px solid #ddd; padding:12px; height:400px; overflow:auto; border-radius:6px; background:#fafafa; }
+    .message { margin-bottom:12px; padding:8px; border-radius:6px; }
+    .message.user { text-align:right; background:#e3f2fd; color:#1565c0; margin-left:20%; }
+    .message.assistant { text-align:left; background:#f1f8e9; color:#558b2f; margin-right:20%; }
+    .controls { display:flex; gap:8px; align-items:center; }
+    .session-list { max-height:180px; overflow:auto; border:1px solid #eee; padding:8px; border-radius:6px; background:#fafafa; }
+    .session-item { padding:8px; border-bottom:1px dashed #e0e0e0; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .session-item:last-child{border-bottom:none}
+    .session-item:hover { background:#f5f5f5; }
+    .right { text-align:right; }
+    .status { font-size:13px; color:#666; margin-top:8px; padding:8px; background:#f8f9fa; border-radius:4px; }
+    pre#backend { white-space:pre-wrap; word-break:break-word; background:#f7f7f7; padding:12px; border-radius:6px; max-height:200px; overflow:auto; font-size:12px; }
+    .flashcard { border:1px solid #ddd; padding:12px; margin:8px 0; border-radius:6px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
+    .quiz-container { border:1px solid #ddd; padding:16px; margin:8px 0; border-radius:6px; background:#fff; }
+    .quiz-question { margin-bottom:12px; font-weight:bold; font-size:15px; }
+    .quiz-option { margin:6px 0; padding:8px; border-radius:4px; transition:background 0.2s; }
+    .quiz-option:hover { background:#f5f5f5; }
+    .quiz-option input { width:auto; margin-right:10px; }
+    .quiz-results { background:#e8f5e8; padding:12px; border-radius:6px; margin-top:12px; }
+    .summary-item, .recommendation-item { border:1px solid #eee; padding:12px; margin:8px 0; border-radius:6px; background:#fff; }
+    .tabs { display:flex; gap:4px; margin-bottom:12px; border-bottom:2px solid #e0e0e0; }
+    .tab { padding:10px 16px; border:none; border-radius:6px 6px 0 0; cursor:pointer; background:#f5f5f5; font-weight:500; transition:all 0.2s; }
+    .tab.active { background:#007cba; color:white; }
+    .tab:hover:not(.active) { background:#e0e0e0; }
+    .tab-content { display:none; }
+    .tab-content.active { display:block; }
+    .reminder-item { border-left:4px solid #007cba; padding:12px; margin:8px 0; background:#f8f9fa; border-radius:4px; }
+    .reminder-item.completed { border-left-color:#28a745; background:#f1f8f1; }
+    .stats-card { padding:16px; border-radius:8px; background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; margin:8px 0; }
+    .badge { display:inline-block; padding:4px 10px; border-radius:12px; font-size:12px; font-weight:500; margin:2px; }
+    .badge-primary { background:#007cba; color:white; }
+    .badge-success { background:#28a745; color:white; }
+    .badge-warning { background:#ffc107; color:#333; }
+    .prediction-card { padding:16px; border-radius:8px; margin:12px 0; }
+    .prediction-pass { background:#d4edda; border:2px solid #28a745; }
+    .prediction-fail { background:#f8d7da; border:2px solid #dc3545; }
+    .video-card { border:1px solid #e0e0e0; padding:12px; margin:8px 0; border-radius:6px; background:#fff; }
+    .video-card:hover { box-shadow:0 4px 8px rgba(0,0,0,0.1); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🎓 ACE — AI Study Assistant</h1>
+    <div>
+      <button id="btn-go-chat" class="small secondary">Chat</button>
+      <button id="btn-go-profile" class="small secondary">Profile</button>
+      <button id="btn-logout-top" class="small danger">Logout</button>
+    </div>
+  </header>
+
+  <div class="grid">
+
+    <!-- LEFT COLUMN -->
+    <div>
+
+      <!-- AUTH SECTION -->
+      <section id="auth-section">
+        <h2>🔐 Sign up / Login</h2>
+        <div style="display:flex; gap:16px;">
+          <div style="flex:1">
+            <h3>Sign up</h3>
+            <label>Full name *</label><input id="signup-name" placeholder="Jane Doe" />
+            <label>Email *</label><input id="signup-email" type="email" />
+            <label>Password *</label><input id="signup-password" type="password" placeholder="6+ characters" />
+            <label>Date of Birth *</label><input id="signup-dob" type="date" />
+            <label>Gender *</label>
+            <select id="signup-gender"><option value="">-- select --</option><option>Male</option><option>Female</option><option>Other</option></select>
+            <label>Phone Number *</label><input id="signup-phone" type="tel" placeholder="+234..." />
+            <label>Country</label><input id="signup-country" placeholder="Nigeria" />
+            <label>School Type</label><input id="signup-school-type" placeholder="University" />
+            <label>School Name</label><input id="signup-school-name" placeholder="University of Lagos" />
+            <label>Degree</label><input id="signup-degree" placeholder="Bachelor's" />
+            <label>Course of Study</label><input id="signup-course" placeholder="Computer Science" />
+            <label>Subject(s)</label><input id="signup-subject" placeholder="Mathematics, Physics" />
+            <div style="margin-top:12px;">
+              <button id="btn-signup">Sign up</button>
+              <button id="btn-google" class="secondary">🔍 Google Sign in</button>
+            </div>
+          </div>
+
+          <div style="flex:1">
+            <h3>Login</h3>
+            <label>Email</label><input id="login-email" type="email" />
+            <label>Password</label><input id="login-password" type="password" />
+            <div style="margin-top:12px;">
+              <button id="btn-login">Login</button>
+              <button id="btn-logout" class="danger">Logout</button>
+            </div>
+            <div class="status" id="status">Not initialized</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PROFILE SECTION -->
+      <section id="profile-section" class="hidden">
+        <h2>👤 Your Profile</h2>
+        <label>Name</label><input id="profile-name" />
+        <label>Date of Birth</label><input id="profile-dob" type="date" />
+        <label>Gender</label>
+        <select id="profile-gender"><option value="">-- select --</option><option>Male</option><option>Female</option><option>Other</option></select>
+        <label>Phone Number</label><input id="profile-phone" />
+        <label>Country</label><input id="profile-country" />
+        <label>School Type</label><input id="profile-school-type" />
+        <label>School Name</label><input id="profile-school-name" />
+        <label>Degree</label><input id="profile-degree" />
+        <label>Course of Study</label><input id="profile-course" />
+        <label>Subject(s)</label><input id="profile-subject" />
+        <div style="margin-top:12px;">
+          <button id="btn-update-profile" class="success">Update Profile</button>
+          <button id="btn-delete-account" class="danger">Delete Account</button>
+        </div>
+      </section>
+
+      <!-- STUDY SESSION -->
+      <section id="study-section" class="hidden">
+        <h2>📚 Study Session Tracker</h2>
+        <div>
+          <button id="btn-start-session" class="success">▶ Start Session</button>
+          <button id="btn-end-session" class="danger" disabled>⏹ End Session</button>
+        </div>
+        <p id="study-status" class="status">No active session</p>
+      </section>
+
+      <!-- PERFORMANCE PREDICTION -->
+      <section id="prediction-section" class="hidden">
+        <h2>🎯 Performance Prediction</h2>
+        <button id="btn-predict-performance">Predict My Performance</button>
+        <div id="prediction-result"></div>
+      </section>
+
+      <!-- GAMIFICATION -->
+      <section id="gamification-section" class="hidden">
+        <h2>🏆 Your Progress</h2>
+        <button id="btn-refresh-gamification">Refresh Stats</button>
+        <div id="gamification-stats"></div>
+      </section>
+
+      <!-- REMINDERS -->
+      <section id="reminders-section" class="hidden">
+        <h2>⏰ Study Reminders</h2>
+        <label>Title</label><input id="reminder-title" />
+        <label>Description</label><textarea id="reminder-desc" rows="2"></textarea>
+        <label>Start Date</label><input id="start-date" type="date" />
+        <label>Due Date</label><input id="reminder-date" type="date" />
+        <label>Upload Files (PDFs or Images)</label>
+        <input id="reminder-files" type="file" multiple accept=".pdf,image/*" />
+
+        <div style="margin-top:10px;">
+          <button id="btn-add-reminder">Add Reminder</button>
+          <button id="btn-refresh-reminders" class="secondary">Refresh</button>
+        </div>
+        <h3 style="margin-top:12px;">Your Reminders</h3>
+        <div id="reminder-list"></div>
+      </section>
+
+      <!-- RECOMMENDATIONS -->
+      <section id="recommendations-section" class="hidden">
+        <h2>📺 Content Recommendations</h2>
+        <button id="btn-get-recommendations">Get Video Recommendations</button>
+        <div id="recommendations-list"></div>
+      </section>
+
+    </div>
+
+    <!-- RIGHT COLUMN -->
+    <div>
+      <section class="chat-box">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h2 style="margin:0">💬 Study Tools</h2>
+          <div>
+            <button id="btn-new-session" class="small">New Chat</button>
+            <button id="btn-clear-memory" class="small danger">Clear Memory</button>
+          </div>
+        </div>
+
+        <!-- TABS -->
+        <div class="tabs">
+          <div class="tab active" data-tab="chat">Chat</div>
+          <div class="tab" data-tab="sessions">Sessions</div>
+          <div class="tab" data-tab="flashcards">Flashcards</div>
+          <div class="tab" data-tab="quiz">Quiz</div>
+          <div class="tab" data-tab="summaries">Summaries</div>
+        </div>
+
+        <!-- CHAT TAB -->
+        <div id="tab-chat" class="tab-content active">
+          <div class="messages" id="messages-container" aria-live="polite"></div>
+
+          <div class="controls" style="margin-top:8px;">
+            <textarea id="message-input" placeholder="Ask me anything..." rows="2"></textarea>
+            <button id="btn-send">Send</button>
+          </div>
+
+          <!-- Audio Recording -->
+          <div style="display:flex; gap:8px; margin-top:10px;">
+            <button id="btn-start-recording" class="small">🎤 Record</button>
+            <button id="btn-stop-recording" class="small danger" disabled>⏹ Stop</button>
+            <div id="recording-status" class="status" style="flex:1;"></div>
+          </div>
+
+          <!-- File Uploads -->
+          <div style="margin-top:10px;">
+            <form id="pdf-summary-form" enctype="multipart/form-data" style="margin-bottom:8px;">
+              <input type="file" name="pdf" accept="application/pdf" />
+              <button type="submit" class="small">📄 PDF Summary</button>
+            </form>
+
+            <form id="pdf-quiz-form" enctype="multipart/form-data" style="margin-bottom:8px;">
+              <input type="file" name="pdf" accept="application/pdf" />
+              <button type="submit" class="small">📝 PDF Quiz</button>
+            </form>
+
+            <form id="pdf-flashcard-form" enctype="multipart/form-data">
+              <input type="file" name="pdf" accept="application/pdf" />
+              <button type="submit" class="small">🃏 PDF Flashcards</button>
+            </form>
+          </div>
+
+          <!-- Text Input Forms -->
+          <form id="quiz-form" style="margin-top:10px;">
+            <textarea id="quiz-input" placeholder="Paste text to generate quiz..." rows="2"></textarea>
+            <button type="submit" class="small">Generate Quiz</button>
+          </form>
+
+          <form id="flashcard-form" style="margin-top:8px;">
+            <textarea id="flashcard-input" placeholder="Paste text to generate flashcards..." rows="2"></textarea>
+            <button type="submit" class="small">Generate Flashcards</button>
+          </form>
+
+          <div class="status" id="chat-status"></div>
+        </div>
+
+        <!-- SESSIONS TAB -->
+        <div id="tab-sessions" class="tab-content">
+          <h3>Chat Sessions</h3>
+          <div style="margin-bottom:12px;">
+            <input id="load-session-id" placeholder="Paste session ID to load..." />
+            <button id="btn-load-session" class="small">Load Session</button>
+          </div>
+          <div class="session-list" id="local-sessions"></div>
+        </div>
+
+        <!-- FLASHCARDS TAB -->
+        <div id="tab-flashcards" class="tab-content">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="margin:0">🃏 Flashcards</h3>
+            <button id="btn-refresh-flashcards" class="small">Refresh</button>
+          </div>
+          <div id="flashcards-container" style="max-height:500px; overflow-y:auto;">
+            <div style="color:#666; text-align:center; padding:20px;">No flashcards yet</div>
+          </div>
+        </div>
+
+        <!-- QUIZ TAB -->
+        <div id="tab-quiz" class="tab-content">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="margin:0">📝 Quizzes</h3>
+            <button id="btn-refresh-quiz" class="small">Refresh</button>
+          </div>
+          <div id="quiz-container" style="max-height:500px; overflow-y:auto;">
+            <div style="color:#666; text-align:center; padding:20px;">No quizzes yet</div>
+          </div>
+        </div>
+
+        <!-- SUMMARIES TAB -->
+        <div id="tab-summaries" class="tab-content">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="margin:0">📄 Summaries</h3>
+            <button id="btn-refresh-summaries" class="small">Refresh</button>
+          </div>
+          <div id="summaries-container" style="max-height:500px; overflow-y:auto;">
+            <div style="color:#666; text-align:center; padding:20px;">No summaries yet</div>
+          </div>
+        </div>
+
+      </section>
+
+      <section>
+        <h3>📊 Backend Response</h3>
+        <pre id="backend">—</pre>
+      </section>
+    </div>
+  </div>
+
+  <script id="firebase-config" type="application/json">{{ firebase_config | tojson | safe }}</script>
+
+  <script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js";
+  import {
+    getAuth,
+    createUserWithEmailAndPassword,
+    signInWithEmailAndPassword,
+    signOut,
+    GoogleAuthProvider,
+    signInWithPopup,
+    onAuthStateChanged
+  } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-auth.js";
+
+  const firebaseConfig = JSON.parse(document.getElementById("firebase-config").textContent);
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const provider = new GoogleAuthProvider();
+
+  const $ = id => document.getElementById(id);
+  const logBackend = (o) => { try { $("backend").textContent = JSON.stringify(o, null, 2); } catch(e){} };
+
+  let idTokenCache = null;
+  let studyStart = null;
+  let mediaRecorder = null;
+  let audioChunks = [];
+  let currentSessionId = null;
+
+  // Tab functionality
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      tab.classList.add('active');
+      const tabId = 'tab-' + tab.dataset.tab;
+      document.getElementById(tabId).classList.add('active');
+    });
+  });
+
+  // Local session storage
+  function getLocalSessions() {
+    try { return JSON.parse(localStorage.getItem("chat_sessions_v1") || "[]"); } 
+    catch (e) { return []; }
+  }
+  function saveLocalSessions(arr) {
+    localStorage.setItem("chat_sessions_v1", JSON.stringify(arr || []));
+  }
+  function addLocalSession(obj) {
+    const arr = getLocalSessions();
+    const exists = arr.find(x => x.id === obj.id);
+    if (!exists) arr.unshift(obj);
+    saveLocalSessions(arr);
+    renderLocalSessions();
+  }
+  function removeLocalSession(id) {
+    const arr = getLocalSessions().filter(s => s.id !== id);
+    saveLocalSessions(arr);
+    renderLocalSessions();
+  }
+  function renderLocalSessions() {
+    const container = $("local-sessions");
+    container.innerHTML = "";
+    const arr = getLocalSessions();
+    if (arr.length === 0) { 
+      container.innerHTML = "<div style='color:#666; padding:12px;'>No sessions yet</div>"; 
+      return; 
+    }
+    arr.forEach(s => {
+      const row = document.createElement("div");
+      row.className = "session-item";
+      row.innerHTML = `
+        <div style="flex:1">
+          <strong>${escapeHtml(s.title || 'Untitled')}</strong>
+          <div style="font-size:11px;color:#999">${s.id.slice(0,16)}...</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button data-load="${s.id}" class="small">Load</button>
+          <button data-delete="${s.id}" class="small danger">Delete</button>
+        </div>`;
+      container.appendChild(row);
+    });
+
+    container.querySelectorAll("button[data-load]").forEach(b=>{
+      b.onclick = () => loadSessionById(b.getAttribute("data-load"));
+    });
+    container.querySelectorAll("button[data-delete]").forEach(b=>{
+      b.onclick = () => {
+        const id = b.getAttribute("data-delete");
+        if (confirm("Remove session locally?")) removeLocalSession(id);
+      };
+    });
+  }
+
+  // API helper
+  async function api(path, opts = {}) {
+    opts.headers = opts.headers || {};
+    const token = idTokenCache || localStorage.getItem("idToken");
+    if (token) opts.headers["Authorization"] = "Bearer " + token;
+    try {
+      const res = await fetch(path, opts);
+      const json = await res.json().catch(()=>({}));
+      if (!res.ok && json && json.error) {
+        return { error: json.error, status: res.status, ...json };
+      }
+      return json;
+    } catch (err) {
+      return { error: err.message || String(err) };
+    }
+  }
+
+  function escapeHtml(str) {
+    if (!str && str !== 0) return "";
+    return String(str).replace(/[&<>"']/g, s => ({ 
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+    }[s]));
+  }
+
+  // Auth state handler
+  onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      $("status").textContent = "✅ Signed in: " + (user.email || user.uid);
+      idTokenCache = await user.getIdToken(true);
+      localStorage.setItem("idToken", idTokenCache);
+      
+      $("auth-section").classList.add("hidden");
+      $("profile-section").classList.remove("hidden");
+      $("reminders-section").classList.remove("hidden");
+      $("study-section").classList.remove("hidden");
+      $("prediction-section").classList.remove("hidden");
+      $("gamification-section").classList.remove("hidden");
+      $("recommendations-section").classList.remove("hidden");
+      
+      await loadProfile();
+      renderLocalSessions();
+      loadGamification();
+    } else {
+      $("status").textContent = "❌ Signed out";
+      idTokenCache = null;
+      localStorage.removeItem("idToken");
+      
+      $("auth-section").classList.remove("hidden");
+      $("profile-section").classList.add("hidden");
+      $("reminders-section").classList.add("hidden");
+      $("study-section").classList.add("hidden");
+      $("prediction-section").classList.add("hidden");
+      $("gamification-section").classList.add("hidden");
+      $("recommendations-section").classList.add("hidden");
+    }
+  });
+
+  // Sign up
+  $("btn-signup").addEventListener("click", async () => {
+    try {
+      const email = $("signup-email").value.trim();
+      const password = $("signup-password").value;
+      if (!email || !password) { alert("Email + password required"); return; }
+      
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      idTokenCache = await cred.user.getIdToken();
+      localStorage.setItem("idToken", idTokenCache);
+
+      const res = await api("/register", {
+        method:"POST",
+        headers: { "Content-Type":"application/json" },
+        body: JSON.stringify({
+          name: $("signup-name").value || "",
+          date_of_birth: $("signup-dob").value || "",
+          gender: $("signup-gender").value || "",
+          phone_number: $("signup-phone").value || "",
+          country: $("signup-country").value || "",
+          school_type: $("signup-school-type").value || "",
+          school_name: $("signup-school-name").value || "",
+          degree: $("signup-degree").value || "",
+          course_of_study: $("signup-course").value || "",
+          subject: $("signup-subject").value || ""
+        })
+      });
+      logBackend(res);
+      if (res.ok) alert("✅ Account created!");
+    } catch (err) {
+      logBackend({ error: err.message });
+      alert("Signup error: " + err.message);
+    }
+  });
+
+  // Login
+  $("btn-login").addEventListener("click", async () => {
+    try {
+      const email = $("login-email").value.trim();
+      const password = $("login-password").value;
+      const cred = await signInWithEmailAndPassword(auth, email, password);
+      idTokenCache = await cred.user.getIdToken();
+      localStorage.setItem("idToken", idTokenCache);
+    } catch (err) {
+      logBackend({ error: err.message });
+      alert("Login error: " + err.message);
+    }
+  });
+
+  // Google Sign In
+  $("btn-google").addEventListener("click", async () => {
+    try {
+      const result = await signInWithPopup(auth, provider);
+      idTokenCache = await result.user.getIdToken();
+      localStorage.setItem("idToken", idTokenCache);
+      
+      const res = await api("/register", {
+        method:"POST",
+        headers: { "Content-Type":"application/json" },
+        body: JSON.stringify({ name: result.user.displayName || "" })
+      });
+      logBackend(res);
+    } catch (err) {
+      logBackend({ error: err.message });
+    }
+  });
+
+  // Logout
+  $("btn-logout").addEventListener("click", async () => { await signOut(auth); });
+  $("btn-logout-top").addEventListener("click", async () => { await signOut(auth); });
+
+  // Profile
+  async function loadProfile() {
+    const res = await api("/profile");
+    if (res.ok && res.profile) {
+      $("profile-name").value = res.profile.name || "";
+      $("profile-dob").value = res.profile.date_of_birth || "";
+      $("profile-gender").value = res.profile.gender || "";
+      $("profile-phone").value = res.profile.phone_number || "";
+      $("profile-country").value = res.profile.country || "";
+      $("profile-school-type").value = res.profile.school_type || "";
+      $("profile-school-name").value = res.profile.school_name || "";
+      $("profile-degree").value = res.profile.degree || "";
+      $("profile-course").value = res.profile.course_of_study || "";
+      $("profile-subject").value = res.profile.subject || "";
+      logBackend(res);
+    }
+  }
+
+  $("btn-update-profile").addEventListener("click", async () => {
+    const res = await api("/update_profile", {
+      method:"POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({
+        name: $("profile-name").value,
+        date_of_birth: $("profile-dob").value,
+        gender: $("profile-gender").value,
+        phone_number: $("profile-phone").value,
+        country: $("profile-country").value,
+        school_type: $("profile-school-type").value,
+        school_name: $("profile-school-name").value,
+        degree: $("profile-degree").value,
+        course_of_study: $("profile-course").value,
+        subject: $("profile-subject").value
+      })
+    });
+    logBackend(res);
+    if (res.ok) alert("✅ Profile updated");
+  });
+
+  $("btn-delete-account").addEventListener("click", async () => {
+    if (!confirm("⚠️ Delete your account permanently?")) return;
+    const res = await api("/delete-account", { method:"DELETE" });
+    logBackend(res);
+    if (res.ok) { await signOut(auth); alert("Account deleted"); }
+  });
+
+  // Study session
+  $("btn-start-session").addEventListener("click", () => {
+    studyStart = new Date();
+    $("study-status").textContent = "⏱️ Session started: " + studyStart.toLocaleTimeString();
+    $("btn-start-session").disabled = true;
+    $("btn-end-session").disabled = false;
+  });
+
+  $("btn-end-session").addEventListener("click", async () => {
+    if (!studyStart) return;
+    const studyEnd = new Date();
+    const diffMs = studyEnd - studyStart;
+    const hours = diffMs / (1000*60*60);
+    $("study-status").textContent = `✅ Session ended. Duration: ${hours.toFixed(2)} hrs`;
+    $("btn-start-session").disabled = false;
+    $("btn-end-session").disabled = true;
+    studyStart = null;
+
+    const res = await api("/log_activity", {
+      method:"POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ session_hours: hours })
+    });
+    logBackend(res);
+    if (res.ok) alert("📊 Study session logged!");
+  });
+
+  // Performance Prediction
+  $("btn-predict-performance").addEventListener("click", async () => {
+    $("btn-predict-performance").disabled = true;
+    $("btn-predict-performance").textContent = "Analyzing...";
+    
+    const res = await api("/predict_performance");
+    logBackend(res);
+    
+    $("btn-predict-performance").disabled = false;
+    $("btn-predict-performance").textContent = "Predict My Performance";
+    
+    if (res.error) {
+      alert("Prediction error: " + res.error);
+      return;
+    }
+    
+    const resultDiv = $("prediction-result");
+    const isPassing = res.prediction === 1;
+    resultDiv.innerHTML = `
+      <div class="prediction-card ${isPassing ? 'prediction-pass' : 'prediction-fail'}">
+        <h3>${isPassing ? '🎉 Predicted: PASS' : '📊 Predicted: Room for Improvement'}</h3>
+        <p><strong>Confidence:</strong> ${res.confidence.toFixed(2)}%</p>
+        <p>${res.message}</p>
+        <details style="margin-top:12px;">
+          <summary style="cursor:pointer; font-weight:500;">View Analysis Data</summary>
+          <pre style="background:white; padding:8px; border-radius:4px; margin-top:8px; font-size:11px;">${JSON.stringify(res.ml_input, null, 2)}</pre>
+        </details>
+      </div>
+    `;
+  });
+
+  // Gamification
+  async function loadGamification() {
+    if (!auth.currentUser) return;
+    const uid = auth.currentUser.uid;
+    const res = await api(`/gamification/${uid}`);
+    if (res.error) {
+      logBackend(res);
+      return;
+    }
+    
+    const stats = res.gamification || {};
+    const statsDiv = $("gamification-stats");
+    statsDiv.innerHTML = `
+      <div class="stats-card">
+        <h3 style="margin:0 0 12px 0;">Level ${stats.level || 1}</h3>
+        <div style="font-size:24px; margin:8px 0;">🔥 ${stats.streak || 0} day streak</div>
+        <div style="font-size:14px;">Longest: ${stats.longest_streak || 0} days</div>
+        <div style="margin-top:12px;">
+          ${(stats.badges || []).map(b => `<span class="badge badge-warning">${b}</span>`).join('')}
+          ${(stats.badges || []).length === 0 ? '<div style="font-size:13px; opacity:0.8;">No badges yet - keep studying!</div>' : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  $("btn-refresh-gamification").addEventListener("click", loadGamification);
+
+// Load reminders
+async function loadReminders() {
+  const res = await api("/get_reminders");
+  if (!res.ok) { logBackend(res); return; }
+  
+  const list = $("reminder-list");
+  list.innerHTML = "";
+  
+  if (!res.reminders || res.reminders.length === 0) {
+    list.innerHTML = "<div style='color:#666; padding:12px;'>No reminders yet</div>";
+    return;
+  }
+  
+  res.reminders.forEach(r => {
+    const div = document.createElement("div");
+    div.className = `reminder-item ${r.completed ? 'completed' : ''}`;
+    
+    // 🧩 Show attached files
+    let filesHtml = "";
+    if (r.files && r.files.length > 0) {
+      filesHtml = `
+        <div style="margin-top:6px; font-size:13px;">
+          📎 Files: ${r.files.map(f => `<a href="${f.url}" target="_blank">${escapeHtml(f.name)}</a>`).join(", ")}
+        </div>`;
+    }
+    
+    // 📚 Study Plan Dropdown
+    let studyPlanHtml = "";
+    if (r.study_plan && Array.isArray(r.study_plan) && r.study_plan.length > 0) {
+      studyPlanHtml = `
+        <details style="margin-top:10px; border:1px solid #e0e0e0; border-radius:6px; padding:8px; background:#f9f9f9;">
+          <summary style="cursor:pointer; font-weight:600; color:#333; user-select:none; outline:none; padding:4px;">
+            📖 Study Plan (${r.study_plan.length} days)
+          </summary>
+          <div style="margin-top:10px; padding:8px; background:#fff; border-radius:4px;">
+            ${r.study_plan.map(day => `
+              <div style="margin-bottom:12px; padding:8px; border-left:3px solid #4CAF50; background:#f8f9fa;">
+                <strong style="color:#2e7d32; font-size:14px;">📅 Day ${escapeHtml(String(day.day))}</strong>
+                <ul style="margin:6px 0 0 20px; padding:0; list-style-type:disc;">
+                  ${day.topics && Array.isArray(day.topics) 
+                    ? day.topics.map(topic => `<li style="margin:4px 0; font-size:13px; color:#555;">${escapeHtml(topic)}</li>`).join("") 
+                    : '<li style="color:#999;">No topics listed</li>'}
+                </ul>
+              </div>
+            `).join("")}
+          </div>
+        </details>`;
+    }
+    
+    div.innerHTML = `
+      <strong>${escapeHtml(r.title)}</strong>
+      <div style="font-size:13px; color:#666; margin:4px 0;">
+        📅 Due: ${escapeHtml(r.due_date)} ${r.completed ? '✅ Completed' : ''}
+      </div>
+      ${r.description ? `<div style="font-size:13px; margin:4px 0;">${escapeHtml(r.description)}</div>` : ''}
+      ${filesHtml}
+      ${studyPlanHtml}
+      <div style="margin-top:8px;">
+        ${!r.completed ? `<button data-complete="${r.id}" class="small success">Complete</button>` : ''}
+        <button data-delete="${r.id}" class="small danger">Delete</button>
+      </div>
+    `;
+    list.appendChild(div);
+  });
+  
+  list.querySelectorAll("button[data-complete]").forEach(b => {
+    b.onclick = async () => {
+      const id = b.getAttribute("data-complete");
+      await api(`/reminders/${id}/complete`, { method: "POST" });
+      loadReminders();
+    };
+  });
+  
+  list.querySelectorAll("button[data-delete]").forEach(b => {
+    b.onclick = async () => {
+      const id = b.getAttribute("data-delete");
+      if (!confirm("Delete reminder?")) return;
+      await api(`/reminders/${id}`, { method: "DELETE" });
+      loadReminders();
+    };
+  });
+}
+
+// Add reminder
+$("btn-add-reminder").addEventListener("click", async () => {
+  const title = $("reminder-title").value.trim();
+  const start = $("start-date").value;
+  const due = $("reminder-date").value;
+  const files = $("reminder-files").files;
+  
+  if (!start || !title || !due) {
+    alert("Title, start date and due date required");
+    return;
+  }
+  
+  const formData = new FormData();
+  formData.append("title", title);
+  formData.append("due_date", due);
+  formData.append("start_date", start);
+  formData.append("description", $("reminder-desc").value || "");
+  for (let f of files) formData.append("files", f);
+  
+  const res = await api("/reminders/study-plan", {
+    method: "POST",
+    body: formData
+  });
+  
+  logBackend(res);
+  if (res.ok) {
+    $("reminder-title").value = "";
+    $("reminder-desc").value = "";
+    $("reminder-date").value = "";
+    $("start-date").value = "";
+    $("reminder-files").value = "";
+    loadReminders();
+    alert("✅ Reminder created!");
+  }
+});
+
+$("btn-refresh-reminders").addEventListener("click", loadReminders);
+
+
+
+
+  // Recommendations
+  $("btn-get-recommendations").addEventListener("click", async () => {
+    $("btn-get-recommendations").disabled = true;
+    $("btn-get-recommendations").textContent = "Loading...";
+    
+    const res = await api("/recommendations");
+    logBackend(res);
+    
+    $("btn-get-recommendations").disabled = false;
+    $("btn-get-recommendations").textContent = "Get Video Recommendations";
+    
+    if (res.error) {
+      alert("Error: " + res.error);
+      return;
+    }
+    
+    const listDiv = $("recommendations-list");
+    listDiv.innerHTML = "";
+    
+    if (!res.recommendations || res.recommendations.length === 0) {
+      listDiv.innerHTML = "<div style='color:#666; padding:12px;'>No recommendations found</div>";
+      return;
+    }
+    
+    res.recommendations.forEach(rec => {
+      const card = document.createElement("div");
+      card.className = "video-card";
+      card.innerHTML = `
+        <h4 style="margin:0 0 8px 0;">${escapeHtml(rec.title)}</h4>
+        <p style="font-size:13px; color:#666; margin:8px 0;">${escapeHtml(rec.reason || 'Recommended for you')}</p>
+        <a href="${escapeHtml(rec.url)}" target="_blank" style="color:#007cba; text-decoration:none; font-weight:500;">
+          🎬 Watch Video →
+        </a>
+      `;
+      listDiv.appendChild(card);
+    });
+  });
+
+  // Audio Recording
+  $("btn-start-recording").addEventListener("click", async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert("Audio recording not supported");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorder = new MediaRecorder(stream);
+      audioChunks = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        audioChunks.push(event.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+        await sendAudioMessage(audioBlob);
+      };
+
+      mediaRecorder.start();
+      $("btn-start-recording").disabled = true;
+      $("btn-stop-recording").disabled = false;
+      $("recording-status").textContent = "🎤 Recording...";
+    } catch (error) {
+      alert("Microphone access error: " + error.message);
+    }
+  });
+
+  $("btn-stop-recording").addEventListener("click", () => {
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+      mediaRecorder.stop();
+      mediaRecorder.stream.getTracks().forEach(track => track.stop());
+      $("btn-start-recording").disabled = false;
+      $("btn-stop-recording").disabled = true;
+      $("recording-status").textContent = "Processing...";
+    }
+  });
+
+  async function sendAudioMessage(audioBlob) {
+    if (!currentSessionId) { 
+      alert("Create or load a session first"); 
+      return; 
+    }
+    
+    const formData = new FormData();
+    formData.append('audio', audioBlob, 'audio.wav');
+
+    try {
+      const res = await fetch(`/chat_audio/${currentSessionId}`, {
+        method: 'POST',
+        headers: { "Authorization": "Bearer " + (localStorage.getItem("idToken")||"") },
+        body: formData
+      });
+
+      const result = await res.json();
+      logBackend(result);
+
+      if (result.error) {
+        alert("Audio error: " + result.error);
+        return;
+      }
+
+      const cont = $("messages-container");
+      
+      const userDiv = document.createElement("div");
+      userDiv.className = "message user";
+      userDiv.innerHTML = `<div>🎤 ${escapeHtml(result.transcription)}</div>`;
+      cont.appendChild(userDiv);
+
+      const aiDiv = document.createElement("div");
+      aiDiv.className = "message assistant";
+      aiDiv.innerHTML = `<div>${escapeHtml(result.answer)}</div>`;
+      cont.appendChild(aiDiv);
+
+      cont.scrollTop = cont.scrollHeight;
+      $("recording-status").textContent = "";
+
+    } catch (error) {
+      alert("Audio upload failed: " + error.message);
+      $("recording-status").textContent = "";
+    }
+  }
+
+  // Chat Sessions
+  async function createNewSession() {
+    const res = await api("/create_chat_session", { method:"POST" });
+    if (!res.session_id) { 
+      alert("Failed to create session"); 
+      logBackend(res); 
+      return; 
+    }
+    const session = { 
+      id: res.session_id, 
+      title: res.title || "New Chat", 
+      created_at: new Date().toISOString() 
+    };
+    addLocalSession(session);
+    return session;
+  }
+
+  $("btn-new-session").addEventListener("click", async () => {
+    const s = await createNewSession();
+    if (s) {
+      currentSessionId = s.id;
+      $("chat-status").textContent = "✅ New session: " + currentSessionId.slice(0,16);
+      $("messages-container").innerHTML = "";
+    }
+  });
+
+  $("btn-load-session").addEventListener("click", async () => {
+    const id = $("load-session-id").value.trim();
+    if (!id) { alert("Paste session ID"); return; }
+    loadSessionById(id);
+  });
+
+  async function loadSessionById(id) {
+    currentSessionId = id;
+    const res = await api("/chat/get-history", {
+      method:"POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ session_id: id })
+    });
+    
+    if (res.error) { 
+      alert("Failed to load: " + res.error); 
+      return; 
+    }
+    
+    addLocalSession({ 
+      id, 
+      title: res.title || "Loaded Session", 
+      created_at: new Date().toISOString() 
+    });
+    
+    await renderMessagesFromHistory(res.messages || []);
+    $("chat-status").textContent = "✅ Loaded: " + id.slice(0,16);
+  }
+
+  async function renderMessagesFromHistory(messages) {
+    const container = $("messages-container");
+    container.innerHTML = "";
+    messages.forEach(m => {
+      const div = document.createElement("div");
+      div.className = "message " + (m.role === "user" ? "user" : "assistant");
+      div.innerHTML = `<div>${escapeHtml(m.content)}</div>`;
+      container.appendChild(div);
+    });
+    container.scrollTop = container.scrollHeight;
+  }
+
+  $("btn-clear-memory").addEventListener("click", async () => {
+    if (!currentSessionId) { alert("No session loaded"); return; }
+    if (!confirm("Clear all messages in this session?")) return;
+    
+    const res = await api("/chat/clear-memory", {
+      method:"POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ session_id: currentSessionId })
+    });
+    logBackend(res);
+    
+    if (res.ok) {
+      $("messages-container").innerHTML = "";
+      alert("✅ Memory cleared");
+    }
+  });
+
+  // Send message
+  async function sendMessage(text) {
+    if (!currentSessionId) { 
+      alert("Create or load a session first"); 
+      return; 
+    }
+    
+    const cont = $("messages-container");
+    const userDiv = document.createElement("div");
+    userDiv.className = "message user";
+    userDiv.innerHTML = `<div>${escapeHtml(text)}</div>`;
+    cont.appendChild(userDiv);
+    cont.scrollTop = cont.scrollHeight;
+
+    const res = await api(`/chat/${currentSessionId}`, {
+      method:"POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ message: text })
+    });
+    
+    logBackend(res);
+    
+    if (res.error) {
+      const errDiv = document.createElement("div");
+      errDiv.className = "message assistant";
+      errDiv.innerHTML = `<div style="color:#ff6b6b">Error: ${escapeHtml(res.error)}</div>`;
+      cont.appendChild(errDiv);
+      return;
+    }
+    
+    const aiDiv = document.createElement("div");
+    aiDiv.className = "message assistant";
+    aiDiv.innerHTML = `<div>${escapeHtml(res.response)}</div>`;
+    cont.appendChild(aiDiv);
+    cont.scrollTop = cont.scrollHeight;
+  }
+
+  $("btn-send").addEventListener("click", async () => {
+    const text = $("message-input").value.trim();
+    if (!text) return;
+    $("message-input").value = "";
+    await sendMessage(text);
+  });
+
+  $("message-input").addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      $("btn-send").click();
+    }
+  });
+
+  // PDF Summary
+  $("pdf-summary-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const fd = new FormData(form);
+    $("chat-status").textContent = "Uploading PDF...";
+    
+    try {
+      const res = await fetch("/chat_summary_pdf", { 
+        method:"POST", 
+        body: fd, 
+        headers: { "Authorization": "Bearer " + (localStorage.getItem("idToken")||"") }
+      });
+      const jr = await res.json();
+      logBackend(jr);
+      
+      if (jr.error) {
+        alert("PDF error: " + jr.error);
+      } else {
+        alert("✅ Summary generated!");
+        if (jr.response) addAssistantMessage(jr.response);
+      }
+    } catch (err) { 
+      alert("Upload failed: " + err.message); 
+    }
+    
+    $("chat-status").textContent = "";
+    form.reset();
+  });
+
+  // PDF Quiz
+  $("pdf-quiz-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const fd = new FormData(form);
+    $("chat-status").textContent = "Generating quiz...";
+    
+    try {
+      const res = await fetch("/chat_pdf_quiz", { 
+        method:"POST", 
+        body: fd, 
+        headers: { "Authorization": "Bearer " + (localStorage.getItem("idToken")||"") }
+      });
+      const jr = await res.json();
+      logBackend(jr);
+      
+      if (jr.error) {
+        alert("Quiz error: " + jr.error);
+      } else {
+        alert("✅ Quiz generated!");
+        loadQuizzes();
+      }
+    } catch (err) { 
+      alert("Upload failed: " + err.message); 
+    }
+    
+    $("chat-status").textContent = "";
+    form.reset();
+  });
+
+  // PDF Flashcards
+  $("pdf-flashcard-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const fd = new FormData(form);
+    $("chat-status").textContent = "Generating flashcards...";
+    
+    try {
+      const res = await fetch("/pdf_flashcards", { 
+        method:"POST", 
+        body: fd, 
+        headers: { "Authorization": "Bearer " + (localStorage.getItem("idToken")||"") }
+      });
+      const jr = await res.json();
+      logBackend(jr);
+      
+      if (jr.error) {
+        alert("Flashcard error: " + jr.error);
+      } else {
+        alert("✅ Flashcards generated!");
+        loadFlashcards();
+      }
+    } catch (err) { 
+      alert("Upload failed: " + err.message); 
+    }
+    
+    $("chat-status").textContent = "";
+    form.reset();
+  });
+
+  // Text to Quiz
+  $("quiz-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = $("quiz-input").value.trim();
+    if (!text) return;
+    
+    $("chat-status").textContent = "Generating quiz...";
+    const res = await api("/chat_quiz", {
+      method:"POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ text })
+    });
+    
+    logBackend(res);
+    if (res.error) {
+      alert("Quiz error: " + res.error);
+    } else {
+      alert("✅ Quiz generated!");
+      loadQuizzes();
+    }
+    
+    $("quiz-input").value = "";
+    $("chat-status").textContent = "";
+  });
+
+  // Text to Flashcards
+  $("flashcard-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = $("flashcard-input").value.trim();
+    if (!text) return;
+    
+    $("chat-status").textContent = "Generating flashcards...";
+    const res = await api("/chat_flashcards", {
+      method:"POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ text })
+    });
+    
+    logBackend(res);
+    if (res.error) {
+      alert("Flashcard error: " + res.error);
+    } else {
+      alert("✅ Flashcards generated!");
+      loadFlashcards();
+    }
+    
+    $("flashcard-input").value = "";
+    $("chat-status").textContent = "";
+  });
+
+  // Load Flashcards
+  async function loadFlashcards() {
+    const res = await api("/get_flashcards");
+    if (res.error) { logBackend(res); return; }
+    
+    const container = $("flashcards-container");
+    container.innerHTML = "";
+    
+    if (!res.flashcards || res.flashcards.length === 0) {
+      container.innerHTML = "<div style='color:#666; text-align:center; padding:20px;'>No flashcards yet</div>";
+      return;
+    }
+    
+    res.flashcards.forEach((set, idx) => {
+      const setDiv = document.createElement("div");
+      setDiv.className = "flashcard";
+      setDiv.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h4 style="margin:0;">Flashcard Set ${idx + 1}</h4>
+          <div>
+            <button data-delete-set="${set.id}" class="small danger">Delete</button>
+          </div>
+        </div>
+        <div style="font-size:12px; color:#666; margin-bottom:8px;">Created: ${set.created_at || 'N/A'}</div>
+        ${(set.flashcards || []).map(card => `
+          <div style="border:1px solid #eee; padding:10px; margin:6px 0; border-radius:4px; background:#f9f9f9;">
+            <strong>Q:</strong> ${escapeHtml(card.question)}<br>
+            <strong>A:</strong> ${escapeHtml(card.answer)}
+          </div>
+        `).join('')}
+      `;
+      container.appendChild(setDiv);
+    });
+    
+    container.querySelectorAll("button[data-delete-set]").forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-delete-set");
+        if (!confirm("Delete flashcard set?")) return;
+        const delRes = await api(`/flashcards/${id}`, { method: "DELETE" });
+        logBackend(delRes);
+        if (delRes.ok) loadFlashcards();
+      };
+    });
+  }
+
+  $("btn-refresh-flashcards").addEventListener("click", loadFlashcards);
+
+  // Load Quizzes
+  async function loadQuizzes() {
+    const res = await api("/get_chat_quiz");
+    if (res.error) { logBackend(res); return; }
+    
+    const container = $("quiz-container");
+    container.innerHTML = "";
+    
+    if (!res.quiz || res.quiz.length === 0) {
+      container.innerHTML = "<div style='color:#666; text-align:center; padding:20px;'>No quizzes yet</div>";
+      return;
+    }
+    
+    res.quiz.forEach((set, idx) => {
+      let quizData;
+      try {
+        quizData = typeof set.quiz === 'string' ? JSON.parse(set.quiz) : set.quiz;
+      } catch (e) {
+        quizData = [];
+      }
+      
+      const setDiv = document.createElement("div");
+      setDiv.className = "quiz-container";
+      setDiv.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h4 style="margin:0;">Quiz Set ${idx + 1}</h4>
+          <div>
+            <button data-take-quiz="${set.id}" class="small">Take Quiz</button>
+            <button data-delete-quiz="${set.id}" class="small danger">Delete</button>
+          </div>
+        </div>
+        <div style="font-size:12px; color:#666;">Created: ${set.created_at || 'N/A'}</div>
+        <div style="font-size:12px; color:#666;">${Array.isArray(quizData) ? quizData.length : 0} questions</div>
+      `;
+      container.appendChild(setDiv);
+    });
+    
+    container.querySelectorAll("button[data-take-quiz]").forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.getAttribute("data-take-quiz");
+        const quiz = res.quiz.find(q => q.id === id);
+        showQuiz(quiz);
+      };
+    });
+    
+    container.querySelectorAll("button[data-delete-quiz]").forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-delete-quiz");
+        if (!confirm("Delete quiz?")) return;
+        const delRes = await api(`/delete_quiz/${id}`, { method: "DELETE" });
+        logBackend(delRes);
+        if (delRes.ok) loadQuizzes();
+      };
+    });
+  }
+
+  function showQuiz(quiz) {
+    let quizData;
+    try {
+      quizData = typeof quiz.quiz === 'string' ? JSON.parse(quiz.quiz) : quiz.quiz;
+    } catch (e) {
+      alert("Error parsing quiz");
+      return;
+    }
+    
+    if (!Array.isArray(quizData) || quizData.length === 0) {
+      alert("No valid questions");
+      return;
+    }
+    
+    const container = $("quiz-container");
+    let currentQuestion = 0;
+    const userAnswers = {};
+    
+    function renderQuestion() {
+      const q = quizData[currentQuestion];
+      container.innerHTML = `
+        <div style="border:2px solid #007cba; padding:16px; border-radius:8px;">
+          <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
+            <h3 style="margin:0;">Question ${currentQuestion + 1}/${quizData.length}</h3>
+            <button onclick="window.loadQuizzes()" class="small">Exit</button>
+          </div>
+          <div class="quiz-question">${escapeHtml(q.question || 'No question')}</div>
+          <div style="margin-top:12px;">
+            ${q.options ? Object.keys(q.options).map(key => `
+              <div class="quiz-option">
+                <input type="radio" name="answer" value="${key}" id="opt_${key}">
+                <label for="opt_${key}">${key}) ${escapeHtml(q.options[key])}</label>
+              </div>
+            `).join('') : '<div style="color:#666;">No options</div>'}
+          </div>
+          <div style="margin-top:16px; display:flex; justify-content:space-between;">
+            <button ${currentQuestion === 0 ? 'disabled' : ''} onclick="window.prevQuestion()" class="small">Previous</button>
+            <button onclick="window.${currentQuestion === quizData.length - 1 ? 'finishQuiz' : 'nextQuestion'}()" class="small">
+              ${currentQuestion === quizData.length - 1 ? 'Finish' : 'Next'}
+            </button>
+          </div>
+        </div>
+      `;
+      
+      if (userAnswers[currentQuestion]) {
+        const radio = container.querySelector(`input[value="${userAnswers[currentQuestion]}"]`);
+        if (radio) radio.checked = true;
+      }
+    }
+    
+    window.nextQuestion = function() {
+      const selected = container.querySelector('input[name="answer"]:checked');
+      if (selected) {
+        userAnswers[currentQuestion] = selected.value;
+        currentQuestion++;
+        renderQuestion();
+      } else {
+        alert("Please select an answer");
+      }
+    };
+    
+    window.prevQuestion = function() {
+      const selected = container.querySelector('input[name="answer"]:checked');
+      if (selected) userAnswers[currentQuestion] = selected.value;
+      currentQuestion--;
+      renderQuestion();
+    };
+    
+    window.finishQuiz = async function() {
+      const selected = container.querySelector('input[name="answer"]:checked');
+      if (selected) userAnswers[currentQuestion] = selected.value;
+      
+      let correct = 0;
+      quizData.forEach((q, i) => {
+        if (userAnswers[i] === q.answer) correct++;
+      });
+      
+      const percentage = Math.round((correct / quizData.length) * 100);
+      
+      await api("/save_quiz_score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          quiz_id: quiz.id,
+          score: correct,
+          total: quizData.length
+        })
+      });
+      
+      container.innerHTML = `
+        <div class="quiz-results">
+          <h3>🎉 Quiz Complete!</h3>
+          <p><strong>Score: ${correct}/${quizData.length} (${percentage}%)</strong></p>
+          <div style="margin-top:12px; max-height:300px; overflow-y:auto;">
+            ${quizData.map((q, i) => `
+              <div style="margin:8px 0; padding:10px; border-radius:4px; ${userAnswers[i] === q.answer ? 'background:#e8f5e8;' : 'background:#ffe8e8;'}">
+                <strong>Q${i + 1}:</strong> ${escapeHtml(q.question)}<br>
+                <strong>Your answer:</strong> ${userAnswers[i] || 'No answer'}<br>
+                <strong>Correct:</strong> ${q.answer} ${userAnswers[i] === q.answer ? '✓' : '✗'}
+              </div>
+            `).join('')}
+          </div>
+          <button onclick="window.loadQuizzes()" style="margin-top:12px;">Back to Quizzes</button>
+        </div>
+      `;
+    };
+    
+    window.loadQuizzes = loadQuizzes;
+    renderQuestion();
+  }
+
+  $("btn-refresh-quiz").addEventListener("click", loadQuizzes);
+
+  // Helper function
+  function addAssistantMessage(txt) {
+    const cont = $("messages-container");
+    const aiDiv = document.createElement("div");
+    aiDiv.className = "message assistant";
+    aiDiv.innerHTML = `<div>${escapeHtml(txt)}</div>`;
+    cont.appendChild(aiDiv);
+    cont.scrollTop = cont.scrollHeight;
+  }
+
+  // Navigation helpers
+  $("btn-go-chat").addEventListener("click", () => {
+    document.querySelector('.tab[data-tab="chat"]').click();
+    window.scrollTo({ top: document.body.scrollHeight, behavior:'smooth' });
+  });
+
+  $("btn-go-profile").addEventListener("click", () => {
+    window.scrollTo({ top: 0, behavior:'smooth' });
+    $("profile-section").scrollIntoView({ behavior: 'smooth' });
+  });
+
+  // Initialize on load
+  renderLocalSessions();
+  
+  // Auto-load data when signed in
+  (async () => { 
+    try { 
+      if (localStorage.getItem("idToken")) { 
+        await loadReminders(); 
+        await loadProfile(); 
+        loadFlashcards();
+        loadQuizzes();
+        loadGamification();
+      } 
+    } catch(e) {
+      console.error("Init error:", e);
+    } 
+  })();
+
+  </script>
+</body>
+</html>

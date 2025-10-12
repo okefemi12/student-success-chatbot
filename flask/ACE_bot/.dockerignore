@@ -1,0 +1,29 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.env/
+
+# Jupyter or notebook checkpoints
+.ipynb_checkpoints/
+
+# Logs and temp files
+*.log
+*.tmp
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Model artifacts (optional)
+*.pkl
+
+# Node/npm if you ever add frontend
+node_modules/
+
+# Git files
+.git
+.gitignore
