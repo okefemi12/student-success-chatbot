@@ -20,6 +20,7 @@ Thumbs.db
 
 # Model artifacts (optional)
 *.pkl
+!flask/ACE_bot/model/student_prediction_model.pkl
 
 # Node/npm if you ever add frontend
 node_modules/
