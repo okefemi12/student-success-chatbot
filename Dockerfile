@@ -11,13 +11,13 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # ---------- Copy Requirements ----------
-COPY requirements.txt .
+COPY flask/ACE_bot/requirements.txt .
 
 # ---------- Install Python Dependencies ----------
 RUN pip install --no-cache-dir -r requirements.txt
 
 # ---------- Copy Application Files ----------
-COPY . .
+COPY flask/ACE_bot/ .
 
 # ---------- Environment Variables ----------
 ENV PYTHONUNBUFFERED=1 \
