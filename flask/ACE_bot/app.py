@@ -15,6 +15,8 @@ from langchain.memory.buffer import ConversationBufferMemory
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain.schema import HumanMessage, AIMessage
 import google.generativeai as genai
+from pptx import Presentation
+from docx import Document
 from openai import OpenAI
 import io
 import requests
@@ -34,7 +36,15 @@ from sklearn.pipeline import Pipeline
 import xgboost as xgb
 import cloudinary
 import cloudinary.uploader
+import requests
+from PyPDF2 import PdfReader
+from openpyxl import load_workbook
+from werkzeug.utils import secure_filename
 import warnings
+import struct
+import wave
+import io
+import base64
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -194,6 +204,13 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY_3"))
 model_cards= genai.GenerativeModel(model_name="gemini-2.5-flash")
 genai.configure(api_key=os.getenv("GEMINI_API_KEY_4"))
 reminder_model = genai.GenerativeModel("gemini-2.5-flash")
+TTS_API_KEYS = [
+    os.environ.get("ACE_VOICE"),              # Primary
+    os.environ.get("ACE_VOICE_BACKUP_1"),     # Backup 1
+    os.environ.get("ACE_VOICE_BACKUP_2"),     # Backup 2
+    os.environ.get("ACE_VOICE_BACKUP_3"),     # Backup 3
+]
+
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 cloudinary.config(
     cloud_name=os.getenv("CLOUD_NAME"),
@@ -268,6 +285,222 @@ def extract_text_from_image(img_path):
     img = Image.open(img_path)
     return pytesseract.image_to_string(img)
 
+def extract_text_from_pdf(file_url):
+    r = requests.get(file_url)
+    with open("temp.pdf", "wb") as f:
+        f.write(r.content)
+    reader = PdfReader("temp.pdf")
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text() or ""
+    os.remove("temp.pdf")
+    return text
+
+
+def extract_text_from_docx(file_url):
+    import requests
+    from docx import Document
+    r = requests.get(file_url)
+    with open("temp.docx", "wb") as f:
+        f.write(r.content)
+    doc = Document("temp.docx")
+    text = "\n".join(p.text for p in doc.paragraphs)
+    os.remove("temp.docx")
+    return text
+
+
+def extract_text_from_pptx(file_url):
+    import requests
+    from pptx import Presentation
+    r = requests.get(file_url)
+    with open("temp.pptx", "wb") as f:
+        f.write(r.content)
+    prs = Presentation("temp.pptx")
+    text = ""
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if hasattr(shape, "text"):
+                text += shape.text + "\n"
+    os.remove("temp.pptx")
+    return text
+
+
+def extract_text_from_excel(file_url):
+    import requests
+    from openpyxl import load_workbook
+    r = requests.get(file_url)
+    with open("temp.xlsx", "wb") as f:
+        f.write(r.content)
+    wb = load_workbook("temp.xlsx")
+    text = ""
+    for sheet in wb.worksheets:
+        for row in sheet.iter_rows(values_only=True):
+            row_text = " ".join(str(cell) for cell in row if cell is not None)
+            text += row_text + "\n"
+    os.remove("temp.xlsx")
+    return text
+
+
+TTS_API_KEYS = [key for key in TTS_API_KEYS if key]
+
+# Track current TTS key index
+current_tts_key_index = 0
+
+
+
+# ✅ ADD THIS FUNCTION FIRST (before generate_audio_with_retry)
+def convert_to_wav(pcm_data, mime_type):
+    """
+    Convert raw PCM audio data to WAV format.
+    
+    Args:
+        pcm_data: Raw PCM audio bytes
+        mime_type: MIME type string (e.g., "audio/L16;rate=24000")
+    
+    Returns:
+        bytes: WAV file data
+    """
+    try:
+        # Parse sample rate from mime_type (e.g., "audio/L16;rate=24000")
+        sample_rate = 24000  # default
+        if "rate=" in mime_type:
+            rate_str = mime_type.split("rate=")[1].split(";")[0]
+            sample_rate = int(rate_str)
+        
+        # PCM parameters
+        num_channels = 1  # mono
+        sample_width = 2  # 16-bit = 2 bytes
+        
+        # Create WAV file in memory
+        wav_buffer = io.BytesIO()
+        
+        with wave.open(wav_buffer, 'wb') as wav_file:
+            wav_file.setnchannels(num_channels)
+            wav_file.setsampwidth(sample_width)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(pcm_data)
+        
+        # Get WAV data
+        wav_buffer.seek(0)
+        return wav_buffer.read()
+        
+    except Exception as e:
+        print(f"⚠️ WAV conversion error: {e}")
+        # Return original data if conversion fails
+        return pcm_data
+
+
+# ✅ NOW define generate_audio_with_retry (after convert_to_wav)
+def generate_audio_with_retry(text, max_retries=None):
+    """
+    Generate audio with automatic API key rotation on quota errors.
+    
+    Args:
+        text: Text to convert to speech
+        max_retries: Maximum retry attempts (defaults to number of API keys)
+    
+    Returns:
+        tuple: (audio_base64, mime_type) or raises exception
+    """
+    global current_tts_key_index
+    
+    if max_retries is None:
+        max_retries = len(TTS_API_KEYS)
+    
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            from google import genai
+            from google.genai import types
+            
+            # Get current TTS API key
+            current_key = TTS_API_KEYS[current_tts_key_index]
+            print(f"🔑 Attempting with TTS API key #{current_tts_key_index + 1}")
+            
+            tts_client = genai.Client(api_key=current_key)
+            
+            # Prepare TTS content
+            tts_contents = [
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=text)]
+                )
+            ]
+            
+            # Configure TTS generation
+            tts_config = types.GenerateContentConfig(
+                response_modalities=["audio"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name="Sadachbia"
+                        )
+                    )
+                )
+            )
+            
+            # Collect audio chunks
+            audio_chunks = []
+            audio_mime_type = None
+            
+            for chunk in tts_client.models.generate_content_stream(
+                model="gemini-2.5-flash-preview-tts",
+                contents=tts_contents,
+                config=tts_config
+            ):
+                if (chunk.candidates and len(chunk.candidates) > 0 and 
+                    chunk.candidates[0].content and chunk.candidates[0].content.parts and
+                    len(chunk.candidates[0].content.parts) > 0):
+                    
+                    part = chunk.candidates[0].content.parts[0]
+                    
+                    if hasattr(part, 'inline_data') and part.inline_data:
+                        if hasattr(part.inline_data, 'data') and part.inline_data.data:
+                            audio_chunks.append(part.inline_data.data)
+                            
+                            if audio_mime_type is None and hasattr(part.inline_data, 'mime_type'):
+                                audio_mime_type = part.inline_data.mime_type
+            
+            if not audio_chunks:
+                raise Exception("No audio chunks received from TTS API")
+            
+            # Combine all audio data
+            combined_audio = b"".join(audio_chunks)
+            
+            # Convert to WAV if needed (NOW convert_to_wav is defined above)
+            if audio_mime_type and "audio/L" in audio_mime_type:
+                wav_data = convert_to_wav(combined_audio, audio_mime_type)
+                audio_base64 = base64.b64encode(wav_data).decode("utf-8")
+                mime_type = "audio/wav"
+            else:
+                audio_base64 = base64.b64encode(combined_audio).decode("utf-8")
+                mime_type = audio_mime_type or "audio/wav"
+            
+            print(f"✅ TTS success with API key #{current_tts_key_index + 1} - {len(combined_audio)} bytes")
+            return audio_base64, mime_type
+                
+        except Exception as e:
+            error_msg = str(e).lower()
+            last_error = e
+            
+            # Check if it's a quota/rate limit error
+            if any(keyword in error_msg for keyword in ['quota', 'rate limit', 'resource exhausted', '429', 'resource_exhausted']):
+                print(f"⚠️ TTS API key #{current_tts_key_index + 1} exhausted: {e}")
+                
+                # Rotate to next key
+                current_tts_key_index = (current_tts_key_index + 1) % len(TTS_API_KEYS)
+                print(f"🔄 Switching to TTS API key #{current_tts_key_index + 1}")
+                
+                # Continue to next attempt
+                continue
+            else:
+                # Non-quota error, don't retry
+                print(f"❌ Non-quota error with TTS API key #{current_tts_key_index + 1}: {e}")
+                raise
+    
+    # All retries failed
+    raise Exception(f"All {max_retries} TTS API keys exhausted: {last_error}")
 
 def parse_study_plan(raw_text):
     study_plan = []
@@ -761,7 +994,70 @@ def chat(session_id):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+@app.route("/chat/<session_id>/audio", methods=["POST"])
+def generate_audio(session_id):
+    """
+    Generate audio for a specific message in the chat session.
+    Expects: { "message_id": "...", "text": "..." } or just { "text": "..." }
+    """
+    try:
+        # Verify user authentication
+        decoded = verify_token_from_request()
+        uid = decoded['uid']
+        
+        # Verify session belongs to user
+        session_ref = (
+            db.collection("users")
+            .document(uid)
+            .collection("chat_sessions")
+            .document(session_id)
+        )
+        session_doc = session_ref.get()
+        if not session_doc.exists:
+            return jsonify({"error": "Invalid session_id"}), 404
+        
+        # Get text to convert to audio
+        data = request.get_json() or {}
+        text = data.get("text", "").strip()
+        message_id = data.get("message_id")  # Optional: to update specific message
+        
+        if not text:
+            return jsonify({"error": "No text provided"}), 400
+        
+        # Generate audio with automatic retry/fallback
+        try:
+            audio_base64, mime_type = generate_audio_with_retry(text)
+            
+        except Exception as e:
+            print(f"❌ TTS generation failed after all retries: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({"error": f"TTS generation failed: {str(e)}"}), 500
+        
+        # Optional: Update Firestore message with audio data if message_id provided
+        if message_id and audio_base64:
+            try:
+                message_ref = session_ref.collection("messages").document(message_id)
+                message_ref.update({
+                    "audio": audio_base64,
+                    "mime_type": mime_type,
+                    "audio_generated_at": firestore.SERVER_TIMESTAMP
+                })
+            except Exception as e:
+                print(f"⚠️ Failed to update message with audio: {e}")
+        
+        # Return audio data
+        return jsonify({
+            "audio": audio_base64,
+            "mime_type": mime_type,
+            "message_id": message_id
+        })
 
+    except Exception as e:
+        print(f"❌ Error in audio generation route: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/chat/clear-memory', methods=['POST'])
 def clear_memory():
@@ -906,84 +1202,98 @@ def chat_audio(session_id):
     
 
     
-@app.route('/chat_summary_pdf', methods=['POST'])
-def chat_pdf():
+@app.route('/media_summary', methods=['POST'])
+def media_summary():
     try:
-        decoded = verify_token_from_request()  
+        # 1️⃣ Verify user
+        decoded = verify_token_from_request()
         uid = decoded["uid"]
         update_streak(uid)
-        if 'pdf' not in request.files:
-            return jsonify({"error": "No PDF uploaded"}), 400
 
-        file = request.files['pdf']
-        pdf_path = "temp.pdf"
-        file.save(pdf_path)
+        # 2️⃣ Check for uploaded file
+        if 'file' not in request.files:
+            return jsonify({"error": "No file uploaded"}), 400
+
+        file = request.files['file']
+        filename = file.filename.lower()
+
+        # 3️⃣ Upload to Cloudinary
+        upload_result = cloudinary.uploader.upload(
+            file,
+            upload_preset="unsigned_summary_file",
+            folder=f"file_summaries/{uid}",
+            resource_type="auto"  # auto-detect pdf, image, docx, etc.
+        )
+        file_url = upload_result["secure_url"]
+        file_name = upload_result["original_filename"]
+
+        # 4️⃣ Extract text depending on file type
+        extracted_text = ""
+        if filename.endswith(".pdf"):
+            extracted_text += extract_text_from_pdf(file_url)
+        elif filename.endswith(".docx"):
+            extracted_text += extract_text_from_docx(file_url)
+        elif filename.endswith(".pptx"):
+            extracted_text += extract_text_from_pptx(file_url)
+        elif filename.endswith((".xls", ".xlsx")):
+            extracted_text += extract_text_from_excel(file_url)
+        else:
+            return jsonify({"error": "Unsupported file type"}), 400
+
+        if not extracted_text.strip():
+            return jsonify({"error": "No readable text could be extracted from the file."}), 400
+
+        # 5️⃣ Split text into manageable chunks
+        def chunk_text(text, max_words=500):
+            words = text.split()
+            return [' '.join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
+
+        chunks = chunk_text(extracted_text)
+
+        # 6️⃣ Summarize each chunk
+        summaries = []
+        for chunk in chunks:
+            prompt = (
+                "You are ACE, a helpful academic AI assistant. "
+                "A student uploaded a study document. "
+                "Summarize this part clearly and concisely:\n\n"
+                f"{chunk.strip()}"
+            )
+            try:
+                response = model_pdf.generate_content(prompt)
+                summaries.append(response.text.strip())
+            except Exception as e:
+                summaries.append(f"(Error in chunk: {str(e)})")
+
+        # 7️⃣ Final combined summary
+        full_summary_prompt = (
+            "Summarize the key points from the following summaries:\n\n" +
+            "\n\n".join(summaries)
+        )
 
         try:
-        # 1. Extract text from PDF
-            reader = PdfReader(pdf_path)
-            extracted_text = ""
-            for page in reader.pages:
-                extracted_text += page.extract_text() or ""
-
-            os.remove(pdf_path)  # Clean up early
-
-            if not extracted_text.strip():
-               return jsonify({"error": "Could not extract readable text from the PDF."}), 400
-
-        # 2. Split text into smaller chunks
-            def chunk_text(text, max_words=500):
-                words = text.split()
-                return [' '.join(words[i:i+max_words]) for i in range(0, len(words), max_words)]
-
-            chunks = chunk_text(extracted_text)
-
-        # 3. Summarize each chunk
-            summaries = []
-            for chunk in chunks:
-                prompt = (
-                    "You are ACE, a helpful, smart AI  assistant. "
-                    "Only respond to academic questions or study-related material."
-                    "Do not answer anything outside the academic field (e.g., entertainment, cooking, gossip, etc.). "
-                    "A student uploaded a study assignment. Summarize this part:\n\n"
-                    f"{chunk.strip()}"
-                )
-                try:
-                    response = model_pdf.generate_content(prompt)
-                    summaries.append(response.text.strip())
-                except Exception as e:
-                    summaries.append(f"(Error in chunk: {str(e)})")
-
-        # 4. Final summarization of all summaries (optional)
-            full_summary_prompt = (
-                "Summarize the key points from the following document parts:\n\n" +
-                '\n\n'.join(summaries)
-            )
-
-            try:
-                final_response = model.generate_content(full_summary_prompt)
-                raw_answer = final_response.text.strip()
-                final_answer = clean_response(raw_answer)
-
-            except Exception as e:
-             print(f"Gemini failed: {e}")
-             raw_answer = generate_backup_response(prompt)
-             final_answer = clean_response(raw_answer)
-
-            db = firestore.client()
-            doc_ref = db.collection("users").document(uid).collection("summaries").document()
-            doc_ref.set({
-                "summary": final_answer,
-                "created_at": datetime.utcnow().isoformat()
-            })
-
-
-            return jsonify({"response": final_answer})
-
+            final_response = model.generate_content(full_summary_prompt)
+            raw_answer = final_response.text.strip()
+            final_answer = clean_response(raw_answer)
         except Exception as e:
-               return jsonify({"error": str(e)}), 500
+            print(f"Gemini failed: {e}")
+            raw_answer = generate_backup_response(full_summary_prompt)
+            final_answer = clean_response(raw_answer)
+
+        # 8️⃣ Save to Firestore
+        db.collection("users").document(uid).collection("summaries").add({
+            "summary": final_answer,
+            "created_at": datetime.utcnow().isoformat(),
+            "source_file": file_name,
+            "file_url": file_url
+        })
+
+        # 9️⃣ Return result
+        return jsonify({"response": final_answer, "file_url": file_url}), 200
+
     except Exception as e:
-           return jsonify({"error": str(e)}), 500
+        print("Error in /media_summary:", str(e))
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/get_summaries', methods=['GET'])
@@ -1087,83 +1397,94 @@ def create_chat_quiz():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/chat_pdf_quiz', methods=['POST'])
-def create_pdf_quiz():
+@app.route('/media_quiz', methods=['POST'])
+def media_quiz():
     try:
+        # 1️⃣ Verify user
         decoded = verify_token_from_request()
         uid = decoded["uid"]
         update_streak(uid)
 
-        if 'pdf' not in request.files:
-            return jsonify({"error": "No PDF uploaded"}), 400
+        # 2️⃣ Check for uploaded file (not just PDF)
+        if 'file' not in request.files:
+            return jsonify({"error": "No file uploaded"}), 400
 
-        file = request.files['pdf']
-        pdf_path = "temp.pdf"
-        file.save(pdf_path)
+        file = request.files['file']
+        filename = file.filename.lower()
+
+        # 3️⃣ Upload file to Cloudinary (auto-detect type)
+        upload_result = cloudinary.uploader.upload(
+            file,
+            upload_preset="unsigned_quiz_uploads",
+            folder=f"file_quizzes/{uid}",
+            resource_type="auto"
+        )
+
+        file_url = upload_result["secure_url"]
+        file_name = upload_result["original_filename"]
+
+        extracted_text = ""
+
+        # 4️⃣ Extract text depending on file type
+        if filename.endswith(".pdf"):
+            extracted_text += extract_text_from_pdf(file_url)
+
+        elif filename.endswith(".docx"):
+            extracted_text += extract_text_from_docx(file_url)
+
+        elif filename.endswith(".pptx"):
+            extracted_text += extract_text_from_pptx(file_url)
+
+        elif filename.endswith((".xls", ".xlsx")):
+            extracted_text += extract_text_from_excel(file_url)
+
+        else:
+            return jsonify({"error": "Unsupported file type"}), 400
+
+        if not extracted_text.strip():
+            return jsonify({"error": "No readable text could be extracted from the file."}), 400
+
+        # 5️⃣ Prompt for quiz generation
+        prompt = (
+            "You are ACE, a helpful AI tutor. Based on the study material below, "
+            "generate exactly 10 multiple-choice quiz flashcards in JSON format.\n\n"
+            "Each flashcard must include:\n"
+            "- 'question'\n"
+            "- 'options': list of 4 choices (A, B, C, D)\n"
+            "- 'answer': correct option letter (e.g., 'B')\n\n"
+            "Return only valid JSON, no explanations or notes.\n\n"
+            f"Text:\n\n{extracted_text[:5000]}"
+        )
 
         try:
-            # 1. Extract text from PDF
-            reader = PdfReader(pdf_path)
-            extracted_text = ""
-            for page in reader.pages:
-                extracted_text += page.extract_text() or ""
+            response = model_cards.generate_content(prompt)
+            quiz_raw = response.text.strip()
 
-            os.remove(pdf_path)  # Clean up temp file
-
-            if not extracted_text.strip():
-                return jsonify({"error": "Could not extract readable text from PDF."}), 400
-
-            # 2. Prompt for quiz generation
-            prompt = f"""
-            You are ACE, a helpful AI tutor. Based on the PDF content below, generate 10 quiz flashcards in JSON format.
-            Each flashcard should include:
-            - "question"
-            - "options" with choices A, B, C, and D
-            - "answer" with the correct option letter
-            Return only valid JSON.
-            \"\"\"{extracted_text}\"\"\" 
-            """
-
-            try:
-                response = model_cards.generate_content(prompt)
-                quiz_raw = response.text.strip()
-
-                # Remove ```json ... ``` if model adds them
-                clean_text = re.sub(r"^```json|```$", "", quiz_raw, flags=re.MULTILINE).strip()
-
-                # Parse JSON into Python object
-                quiz_data = json.loads(clean_text)
-
-                # Save structured quiz to Firestore under the same "quiz" collection
-                doc_ref = db.collection("users").document(uid).collection("quiz").document()
-                doc_ref.set({
-                    "quiz": quiz_data,
-                    "created_at": datetime.utcnow().isoformat()
-                })
-
-                return jsonify({"quiz": quiz_data}), 200
-
-            except Exception as e:
-                print(f"Gemini failed: {e}")
-                backup = generate_backup_response(prompt)
-
-                try:
-                    backup_data = json.loads(backup)
-                except:
-                    backup_data = {"raw": backup}
-
-                doc_ref = db.collection("users").document(uid).collection("quiz").document()
-                doc_ref.set({
-                    "quiz": backup_data,
-                    "created_at": datetime.utcnow().isoformat()
-                })
-
-                return jsonify({"quiz": backup_data}), 200
+            # Remove ```json ... ``` wrappers if present
+            clean_text = re.sub(r"^```json|```$", "", quiz_raw, flags=re.MULTILINE).strip()
+            quiz_data = json.loads(clean_text)
 
         except Exception as e:
-            return jsonify({"error": f"PDF processing failed: {str(e)}"}), 500
+            print(f"Gemini quiz generation failed: {e}")
+            backup = generate_backup_response(prompt)
+            try:
+                quiz_data = json.loads(backup)
+            except:
+                quiz_data = {"raw": backup}
+
+        # 6️⃣ Save quiz to Firestore
+        db.collection("users").document(uid).collection("quiz").add({
+            "quiz": quiz_data,
+            "created_at": datetime.utcnow().isoformat(),
+            "source_file": file_name,
+            "file_url": file_url
+        })
+
+        # 7️⃣ Return result
+        return jsonify({"quiz": quiz_data, "file_url": file_url}), 200
 
     except Exception as e:
+        print("Error in /chat_pdf_quiz:", str(e))
         return jsonify({"error": str(e)}), 500
 
 
@@ -1264,94 +1585,106 @@ def save_quiz_score():
         return jsonify({"error": str(e)}), 500
 
 
-
 #---- Flashcards-----
-@app.route('/pdf_flashcards', methods=['POST'])
-def pdf_flashcards():
+@app.route('/media_flashcards', methods=['POST'])
+def media_flashcards():
     try:
-        # 1. Verify user
+        # 1️⃣ Verify user
         decoded = verify_token_from_request()
         uid = decoded["uid"]
         update_streak(uid)
 
-        if 'pdf' not in request.files:
-            return jsonify({"error": "No PDF uploaded"}), 400
+        # 2️⃣ Check for uploaded file
+        if 'file' not in request.files:
+            return jsonify({"error": "No file uploaded"}), 400
 
-        file = request.files['pdf']
-        pdf_path = "temp_flashcards.pdf"
-        file.save(pdf_path)
+        file = request.files['file']
+        filename = file.filename.lower()
+
+        # 3️⃣ Upload file to Cloudinary
+        upload_result = cloudinary.uploader.upload(
+            file,
+            upload_preset="unsigned_flashcards",
+            folder=f"flashcards/{uid}",
+            resource_type="auto"  # auto-detect pdf, image, docx, etc.
+        )
+
+        file_url = upload_result["secure_url"]
+        file_name = upload_result["original_filename"]
+
+        extracted_text = ""
+
+        # 4️⃣ Extract text depending on file type
+        if filename.endswith(".pdf"):
+            extracted_text += extract_text_from_pdf(file_url)
+
+        elif filename.endswith(".docx"):
+            extracted_text += extract_text_from_docx(file_url)
+
+        elif filename.endswith(".pptx"):
+            extracted_text += extract_text_from_pptx(file_url)
+
+        elif filename.endswith((".xls", ".xlsx")):
+            extracted_text += extract_text_from_excel(file_url)
+
+        else:
+            return jsonify({"error": "Unsupported file type"}), 400
+
+        if not extracted_text.strip():
+            return jsonify({"error": "No readable text could be extracted from the file."}), 400
+
+        # 5️⃣ Generate flashcards with AI
+        flashcard_prompt = (
+            "You are ACE, a helpful academic AI assistant. "
+            "A student uploaded a study document (PDF, PowerPoint, Excel, or Word). "
+            "From the extracted text below, generate exactly 10 flashcards. "
+            "Return ONLY a valid JSON array of objects with 'question' and 'answer' fields. "
+            "Do not include explanations or any other text.\n\n"
+            "Example:\n"
+            "[{\"question\": \"What is X?\", \"answer\": \"X is ...\"}, ...]\n\n"
+            f"Text:\n\n{extracted_text[:5000]}"
+        )
 
         try:
-            # 2. Extract text from PDF
-            reader = PdfReader(pdf_path)
-            extracted_text = ""
-            for page in reader.pages:
-                extracted_text += page.extract_text() or ""
-            os.remove(pdf_path)  # clean temp file
-
-            if not extracted_text.strip():
-                return jsonify({"error": "Could not extract readable text from the PDF."}), 400
-
-            # 3. Prompt AI
-            flashcard_prompt = (
-                "You are ACE, a helpful academic AI assistant. "
-                "A student uploaded a study PDF. From the text below, generate exactly 10 flashcards. "
-                "Return ONLY a valid JSON array of objects, where each object has 'question' and 'answer'. "
-                "Do not include Q:/A: labels, explanations, or extra text. "
-                "For example:\n"
-                "[{\"question\": \"What is X?\", \"answer\": \"X is ...\"}, ...]\n\n"
-                f"Text:\n\n{extracted_text[:5000]}"
-            )
-
-            try:
-                response = model_pdf.generate_content(flashcard_prompt)
-                raw_flashcards = response.text.strip()
-            except Exception as e:
-                print(f"Flashcard generation failed: {e}")
-                raw_flashcards = generate_backup_response(flashcard_prompt)
-
-            # 4. Parse response
-            import re, json
-            flashcards = []
-
-            try:
-                # Try strict JSON
-                match = re.search(r"\[.*\]", raw_flashcards, re.DOTALL)
-                if match:
-                    flashcards = json.loads(match.group(0))
-                else:
-                    flashcards = json.loads(raw_flashcards)
-            except Exception:
-                # Regex fallback if AI gave Q:/A:
-                print("AI response not valid JSON, using regex fallback.")
-                qa_pairs = re.findall(r"Q[:\-](.*?)A[:\-](.*?)(?=Q[:\-]|$)", raw_flashcards, re.DOTALL)
-                flashcards = [{"question": q.strip(), "answer": a.strip()} for q, a in qa_pairs]
-
-            # Ensure we have 10
-            if not flashcards:
-                flashcards = [{"question": f"Placeholder Q{i+1}", "answer": "Placeholder A"} for i in range(10)]
-            elif len(flashcards) > 10:
-                flashcards = flashcards[:10]
-            elif len(flashcards) < 10:
-                needed = 10 - len(flashcards)
-                flashcards += [{"question": f"Extra Q{i+1}", "answer": "Extra A"} for i in range(needed)]
-
-            print("Raw AI output:", raw_flashcards)
-            print("Final parsed flashcards:", flashcards)
-
-            # 5. Save to Firestore
-            db.collection("users").document(uid).collection("flashcards").add({
-                "flashcards": flashcards,
-                "created_at": datetime.utcnow().isoformat()
-            })
-
-            # 6. Return to frontend
-            return jsonify({"flashcards": flashcards}), 200
-
+            response = model_pdf.generate_content(flashcard_prompt)
+            raw_flashcards = response.text.strip()
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            print(f"Flashcard generation failed: {e}")
+            raw_flashcards = generate_backup_response(flashcard_prompt)
+
+        # 6️⃣ Parse response safely
+        match = re.search(r"\[.*\]", raw_flashcards, re.DOTALL)
+        flashcards = []
+        try:
+            if match:
+                flashcards = json.loads(match.group(0))
+            else:
+                flashcards = json.loads(raw_flashcards)
+        except Exception:
+            qa_pairs = re.findall(r"Q[:\-](.*?)A[:\-](.*?)(?=Q[:\-]|$)", raw_flashcards, re.DOTALL)
+            flashcards = [{"question": q.strip(), "answer": a.strip()} for q, a in qa_pairs]
+
+        # 7️⃣ Ensure 10 cards total
+        if not flashcards:
+            flashcards = [{"question": f"Placeholder Q{i+1}", "answer": "Placeholder A"} for i in range(10)]
+        elif len(flashcards) > 10:
+            flashcards = flashcards[:10]
+        elif len(flashcards) < 10:
+            flashcards += [{"question": f"Extra Q{i+1}", "answer": "Extra A"} for i in range(10 - len(flashcards))]
+
+        # 8️⃣ Save to Firestore
+        db.collection("users").document(uid).collection("flashcards").add({
+            "flashcards": flashcards,
+            "created_at": datetime.utcnow().isoformat(),
+            "source_file": file_name,
+            "file_url": file_url
+        })
+
+        # 9️⃣ Return response
+        return jsonify({"flashcards": flashcards, "file_url": file_url}), 200
 
     except Exception as e:
+        print("Error in /media_flashcards:", str(e))
         return jsonify({"error": str(e)}), 500
 
 @app.route('/chat_flashcards', methods = ['POST'])
@@ -1360,7 +1693,7 @@ def chat_flashcards():
         decoded = verify_token_from_request()
         uid = decoded['uid']
         update_streak(uid)
-        data = request.get("text", " ")
+        data = request.get_json().get("text", "").strip()
         if not data:
             return jsonify({"error": "no text provided"}),400
 
@@ -1884,6 +2217,127 @@ def gamification(uid):
     except Exception as e:
         print("Gamification error:", e)
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/library/<uid>", methods=["GET", "POST", "DELETE"])
+def library(uid):
+    try:
+        decoded = verify_token_from_request()
+        uid = decoded["uid"]
+        user_library_ref = db.collection("users").document(uid).collection("library")
+
+        # -----------------------
+        # 📥 POST → Upload documents
+        # -----------------------
+        if request.method == "POST":
+            title = request.form.get("title")
+            uploaded_files = request.files.getlist("files")
+
+            if not uploaded_files:
+                return jsonify({"error": "No files uploaded"}), 400
+
+            file_links = []
+            for file in uploaded_files:
+                upload_result = cloudinary.uploader.upload(
+                    file,
+                    upload_preset="unsigned_library",
+                    folder=f"library/{uid}",
+                    resource_type="auto",  # handles pdf, image, docx, etc.
+                )
+                file_links.append({
+                    "name": upload_result.get("original_filename"),
+                    "url": upload_result.get("secure_url"),
+                    "type": upload_result.get("resource_type"),
+                })
+
+            doc_ref = user_library_ref.document()
+            doc_ref.set({
+                "title": title,
+                "files": file_links,
+                "created_at": firestore.SERVER_TIMESTAMP,
+            })
+
+            return jsonify({"ok": True, "message": "Files uploaded successfully", "file_links": file_links}), 200
+
+        # -----------------------
+        # 📤 GET → Retrieve all documents
+        # -----------------------
+        elif request.method == "GET":
+            docs = user_library_ref.order_by("created_at", direction=firestore.Query.DESCENDING).stream()
+            library_items = [{"id": doc.id, **doc.to_dict()} for doc in docs]
+            return jsonify({"ok": True, "library": library_items}), 200
+
+        # -----------------------
+        # 🗑 DELETE → Delete all library entries
+        # -----------------------
+        elif request.method == "DELETE":
+            docs = user_library_ref.stream()
+            for doc in docs:
+                doc.reference.delete()
+            return jsonify({"ok": True, "message": "All library documents deleted"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+# -----------------------
+# ✏️ PUT → Update specific library document (title or files)
+# -----------------------
+@app.route("/library_update/<uid>/<doc_id>", methods=["PUT"])
+def update_library(uid, doc_id):
+    try:
+        decoded = verify_token_from_request()
+        uid = decoded["uid"]
+        title = request.form.get("title")
+        uploaded_files = request.files.getlist("files")
+
+        doc_ref = db.collection("users").document(uid).collection("library").document(doc_id)
+
+        update_data = {}
+        if title:
+            update_data["title"] = title
+        if uploaded_files:
+            file_links = []
+            for file in uploaded_files:
+                upload_result = cloudinary.uploader.upload(
+                    file,
+                    upload_preset="unsigned_library",
+                    folder=f"library/{uid}",
+                    resource_type="auto",
+                )
+                file_links.append({
+                    "name": upload_result.get("original_filename"),
+                    "url": upload_result.get("secure_url"),
+                    "type": upload_result.get("resource_type"),
+                })
+            update_data["files"] = firestore.ArrayUnion(file_links)
+
+        if update_data:
+            doc_ref.update(update_data)
+            return jsonify({"ok": True, "message": "Library entry updated successfully"}), 200
+        else:
+            return jsonify({"error": "No updates provided"}), 400
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+# -----------------------
+# ❌ DELETE → Delete specific library document
+# -----------------------
+@app.route("/library_delete/<uid>/<doc_id>", methods=["DELETE"])
+def delete_library_item(uid, doc_id):
+    try:
+        decoded = verify_token_from_request()
+        uid = decoded["uid"]
+
+        doc_ref = db.collection("users").document(uid).collection("library").document(doc_id)
+        doc_ref.delete()
+
+        return jsonify({"ok": True, "message": "Library document deleted successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
 
 
 # ---------- Run ----------
