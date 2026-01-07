@@ -45,6 +45,7 @@ import struct
 import wave
 import io
 import base64
+import mimetypes 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -198,6 +199,10 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 serper_api_key = os.getenv("SERPER_API_KEY")
 genai.configure(api_key=os.getenv("GEMINI_API_KEY_1"))
 model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+genai.configure(api_key=os.getenv("RECOMMEND_BACKUP1"))
+rec_backup1 = genai.GenerativeModel(model_name="gemini-2.5-flash")
+genai.configure(api_key=os.getenv("RECOMMEND_BACKUP2"))
+rec_backup2 = genai.GenerativeModel(model_name="gemini-2.5-flash")
 genai.configure(api_key=os.getenv("GEMINI_API_KEY_2"))
 model_pdf = genai.GenerativeModel(model_name="gemini-2.5-flash")
 genai.configure(api_key=os.getenv("GEMINI_API_KEY_3"))
@@ -218,7 +223,14 @@ cloudinary.config(
     api_secret=os.getenv("API_SECRET")
 )
 
-
+def rec_backup_response(prompt):
+    try:
+        return rec_backup1.generate_content(prompt)
+    except Exception:
+        try: 
+            return rec_backup2.generate_content(prompt)
+        except Exception as e: 
+            return f"Error: {e}"
 #Backup models 
 def generate_backup_response(prompt):
     try:
@@ -348,7 +360,7 @@ current_tts_key_index = 0
 
 
 
-# ✅ ADD THIS FUNCTION FIRST (before generate_audio_with_retry)
+# DD THIS FUNCTION FIRST (before generate_audio_with_retry)
 def convert_to_wav(pcm_data, mime_type):
     """
     Convert raw PCM audio data to WAV format.
@@ -390,17 +402,10 @@ def convert_to_wav(pcm_data, mime_type):
         return pcm_data
 
 
-# ✅ NOW define generate_audio_with_retry (after convert_to_wav)
+# NOW define generate_audio_with_retry (after convert_to_wav)
 def generate_audio_with_retry(text, max_retries=None):
     """
-    Generate audio with automatic API key rotation on quota errors.
-    
-    Args:
-        text: Text to convert to speech
-        max_retries: Maximum retry attempts (defaults to number of API keys)
-    
-    Returns:
-        tuple: (audio_base64, mime_type) or raises exception
+    Generate audio with automatic API key rotation on quota OR network errors.
     """
     global current_tts_key_index
     
@@ -420,7 +425,6 @@ def generate_audio_with_retry(text, max_retries=None):
             
             tts_client = genai.Client(api_key=current_key)
             
-            # Prepare TTS content
             tts_contents = [
                 types.Content(
                     role="user",
@@ -428,7 +432,6 @@ def generate_audio_with_retry(text, max_retries=None):
                 )
             ]
             
-            # Configure TTS generation
             tts_config = types.GenerateContentConfig(
                 response_modalities=["audio"],
                 speech_config=types.SpeechConfig(
@@ -440,18 +443,17 @@ def generate_audio_with_retry(text, max_retries=None):
                 )
             )
             
-            # Collect audio chunks
             audio_chunks = []
             audio_mime_type = None
             
+            # Generate stream
             for chunk in tts_client.models.generate_content_stream(
-                model="gemini-2.5-flash-preview-tts",
+                model="gemini-2.5-flash", # Ensure model name is correct (remove -preview-tts if needed)
                 contents=tts_contents,
                 config=tts_config
             ):
                 if (chunk.candidates and len(chunk.candidates) > 0 and 
-                    chunk.candidates[0].content and chunk.candidates[0].content.parts and
-                    len(chunk.candidates[0].content.parts) > 0):
+                    chunk.candidates[0].content and chunk.candidates[0].content.parts):
                     
                     part = chunk.candidates[0].content.parts[0]
                     
@@ -463,12 +465,11 @@ def generate_audio_with_retry(text, max_retries=None):
                                 audio_mime_type = part.inline_data.mime_type
             
             if not audio_chunks:
-                raise Exception("No audio chunks received from TTS API")
+                raise Exception("No audio chunks received (Stream Empty)")
             
-            # Combine all audio data
             combined_audio = b"".join(audio_chunks)
             
-            # Convert to WAV if needed (NOW convert_to_wav is defined above)
+            # Convert to WAV if needed (ensure convert_to_wav is defined in your code)
             if audio_mime_type and "audio/L" in audio_mime_type:
                 wav_data = convert_to_wav(combined_audio, audio_mime_type)
                 audio_base64 = base64.b64encode(wav_data).decode("utf-8")
@@ -477,30 +478,35 @@ def generate_audio_with_retry(text, max_retries=None):
                 audio_base64 = base64.b64encode(combined_audio).decode("utf-8")
                 mime_type = audio_mime_type or "audio/wav"
             
-            print(f"✅ TTS success with API key #{current_tts_key_index + 1} - {len(combined_audio)} bytes")
+            print(f"TTS success with API key #{current_tts_key_index + 1}")
             return audio_base64, mime_type
                 
         except Exception as e:
             error_msg = str(e).lower()
             last_error = e
             
-            # Check if it's a quota/rate limit error
-            if any(keyword in error_msg for keyword in ['quota', 'rate limit', 'resource exhausted', '429', 'resource_exhausted']):
-                print(f"⚠️ TTS API key #{current_tts_key_index + 1} exhausted: {e}")
-                
-                # Rotate to next key
+            # Check for Quota limits OR Network Connection errors
+            is_quota_error = any(k in error_msg for k in ['quota', 'rate limit', 'resource exhausted', '429'])
+            is_network_error = any(k in error_msg for k in ['getaddrinfo', 'connecterror', 'socket', 'errno 11002', '11001'])
+            
+            if is_quota_error:
+                print(f"API key #{current_tts_key_index + 1} exhausted. Switching...")
                 current_tts_key_index = (current_tts_key_index + 1) % len(TTS_API_KEYS)
-                print(f"🔄 Switching to TTS API key #{current_tts_key_index + 1}")
                 
-                # Continue to next attempt
-                continue
+            elif is_network_error:
+                print(f"Network Error (DNS/Connection) with key #{current_tts_key_index + 1}: {e}")
+                print("Waiting 3 seconds for internet to stabilize...")
+                time.sleep(3) # Wait before retrying
+                # We do NOT switch keys for network errors, we just retry the loop (or you can switch if you prefer)
+                # If you want to switch keys anyway:
+                # current_tts_key_index = (current_tts_key_index + 1) % len(TTS_API_KEYS)
+                
             else:
-                # Non-quota error, don't retry
-                print(f"❌ Non-quota error with TTS API key #{current_tts_key_index + 1}: {e}")
-                raise
+                # Actual code error (not network/quota), so we crash
+                print(f"❌ Unrecoverable error with TTS API key #{current_tts_key_index + 1}: {e}")
+                raise e
     
-    # All retries failed
-    raise Exception(f"All {max_retries} TTS API keys exhausted: {last_error}")
+    raise Exception(f"TTS generation failed after {max_retries} attempts. Last error: {last_error}")
 
 def parse_study_plan(raw_text):
     study_plan = []
@@ -915,7 +921,7 @@ def chat(session_id):
 
         # 🔹 Build Gemini prompt
         gemini_prompt = (
-            "You are ACE, a helpful intelligent AI study tutor and assistant. Your task is to assist with studying. "
+            "You are FELIX, a helpful intelligent AI study tutor and assistant. Your task is to assist with studying. "
             "Your goal is to help students deeply understand and apply academic concepts, not just recall them.\n\n"
     
             "Follow these steps carefully for each question:\n"
@@ -942,7 +948,7 @@ def chat(session_id):
             f"{context}\n\n"
             f"Current question: {user_message}\n\n"
     
-            "Now think carefully and respond as ACE — explain the concept briefly, then solve step by step if needed, "
+            "Now think carefully and respond as FELIX — explain the concept briefly, then solve step by step if needed, "
             "and finish with a clear final answer and one short follow-up question."
             "If a topic is complex, recommend that the user reviews additional resources.\n"
        )
@@ -1029,7 +1035,7 @@ def generate_audio(session_id):
             audio_base64, mime_type = generate_audio_with_retry(text)
             
         except Exception as e:
-            print(f"❌ TTS generation failed after all retries: {str(e)}")
+            print(f"TTS generation failed after all retries: {str(e)}")
             import traceback
             traceback.print_exc()
             return jsonify({"error": f"TTS generation failed: {str(e)}"}), 500
@@ -1044,7 +1050,7 @@ def generate_audio(session_id):
                     "audio_generated_at": firestore.SERVER_TIMESTAMP
                 })
             except Exception as e:
-                print(f"⚠️ Failed to update message with audio: {e}")
+                print(f" Failed to update message with audio: {e}")
         
         # Return audio data
         return jsonify({
@@ -1054,7 +1060,7 @@ def generate_audio(session_id):
         })
 
     except Exception as e:
-        print(f"❌ Error in audio generation route: {str(e)}")
+        print(f" Error in audio generation route: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -1202,22 +1208,28 @@ def chat_audio(session_id):
     
 
     
+ # Make sure this is imported
+
 @app.route('/media_summary', methods=['POST'])
 def media_summary():
     try:
-        # 1️⃣ Verify user
+        # 1️ Verify user
         decoded = verify_token_from_request()
         uid = decoded["uid"]
         update_streak(uid)
 
-        # 2️⃣ Check for uploaded file
+        # 2️ Check for uploaded file
         if 'file' not in request.files:
             return jsonify({"error": "No file uploaded"}), 400
 
         file = request.files['file']
         filename = file.filename.lower()
 
-        # 3️⃣ Upload to Cloudinary
+        # [FIX] Determine Mime Type for Gemini (Needed for images)
+        mime_type, _ = mimetypes.guess_type(filename)
+
+        # 3️ Upload to Cloudinary
+        # This reads the file stream to the end!
         upload_result = cloudinary.uploader.upload(
             file,
             upload_preset="unsigned_summary_file",
@@ -1227,60 +1239,100 @@ def media_summary():
         file_url = upload_result["secure_url"]
         file_name = upload_result["original_filename"]
 
-        # 4️⃣ Extract text depending on file type
+        # [FIX] REWIND THE FILE
+        # Crucial: Move the cursor back to the start so we can read it again
+        file.seek(0)
+
+        # 4️ Extract text OR Prepare for Visual Processing
         extracted_text = ""
+        is_visual_file = False  # Flag for Images or Scanned PDFs
+
         if filename.endswith(".pdf"):
+            # Try to extract text using your existing function
             extracted_text += extract_text_from_pdf(file_url)
+            # If extraction yields nothing, assume it's a scanned PDF
+            if not extracted_text.strip():
+                is_visual_file = True
+        
         elif filename.endswith(".docx"):
             extracted_text += extract_text_from_docx(file_url)
         elif filename.endswith(".pptx"):
             extracted_text += extract_text_from_pptx(file_url)
         elif filename.endswith((".xls", ".xlsx")):
             extracted_text += extract_text_from_excel(file_url)
+        
+        # [FIX] Handle Images (JPG, PNG, etc.)
+        elif filename.endswith((".jpg", ".jpeg", ".png", ".webp", ".heic")):
+            is_visual_file = True
+        
         else:
             return jsonify({"error": "Unsupported file type"}), 400
 
-        if not extracted_text.strip():
-            return jsonify({"error": "No readable text could be extracted from the file."}), 400
 
-        # 5️⃣ Split text into manageable chunks
-        def chunk_text(text, max_words=500):
-            words = text.split()
-            return [' '.join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
+        # 5️ Generate Summary (Two Methods)
+        final_answer = ""
 
-        chunks = chunk_text(extracted_text)
+        # Method A: Text-Based Summary (For DOCX, PPTX, Readable PDFs)
+        if extracted_text.strip() and not is_visual_file:
+            # Chunking logic
+            def chunk_text(text, max_words=500):
+                words = text.split()
+                return [' '.join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
 
-        # 6️⃣ Summarize each chunk
-        summaries = []
-        for chunk in chunks:
-            prompt = (
-                "You are ACE, a helpful academic AI assistant. "
-                "A student uploaded a study document. "
-                "Summarize this part clearly and concisely:\n\n"
-                f"{chunk.strip()}"
+            chunks = chunk_text(extracted_text)
+            summaries = []
+            
+            for chunk in chunks:
+                prompt = (
+                    "You are Felix, a helpful academic AI assistant. "
+                    "A student uploaded a study document. "
+                    "Summarize this part clearly and concisely:\n\n"
+                    f"{chunk.strip()}"
+                )
+                try:
+                    response = model_pdf.generate_content(prompt)
+                    summaries.append(response.text.strip())
+                except Exception as e:
+                    summaries.append(f"(Error in chunk: {str(e)})")
+
+            full_summary_prompt = (
+                "Summarize the key points from the following summaries:\n\n" +
+                "\n\n".join(summaries)
             )
+
             try:
-                response = model_pdf.generate_content(prompt)
-                summaries.append(response.text.strip())
+                final_response = model.generate_content(full_summary_prompt)
+                raw_answer = final_response.text.strip()
+                final_answer = clean_response(raw_answer)
             except Exception as e:
-                summaries.append(f"(Error in chunk: {str(e)})")
+                print(f"Gemini failed: {e}")
+                raw_answer = generate_backup_response(full_summary_prompt)
+                final_answer = clean_response(raw_answer)
 
-        # 7️⃣ Final combined summary
-        full_summary_prompt = (
-            "Summarize the key points from the following summaries:\n\n" +
-            "\n\n".join(summaries)
-        )
+        # Method B: Visual Summary (For Images & Scanned PDFs)
+        elif is_visual_file:
+            try:
+                # Read the raw bytes from the rewound file
+                file_data = file.read()
+                
+                prompt = "You are Felix. Analyze this image or document. Extract the text and provide a detailed academic summary of the content."
+                
+                # Send bytes directly to Gemini (Flash supports this natively)
+                response = model_pdf.generate_content([
+                    {"mime_type": mime_type, "data": file_data},
+                    prompt
+                ])
+                final_answer = clean_response(response.text.strip())
+                
+            except Exception as e:
+                 print(f"Visual processing failed: {e}")
+                 return jsonify({"error": "Failed to analyze image/file. It may be too large or unclear."}), 500
 
-        try:
-            final_response = model.generate_content(full_summary_prompt)
-            raw_answer = final_response.text.strip()
-            final_answer = clean_response(raw_answer)
-        except Exception as e:
-            print(f"Gemini failed: {e}")
-            raw_answer = generate_backup_response(full_summary_prompt)
-            final_answer = clean_response(raw_answer)
+        else:
+            return jsonify({"error": "Could not extract text from this file."}), 400
 
-        # 8️⃣ Save to Firestore
+
+        # 8️ Save to Firestore
         db.collection("users").document(uid).collection("summaries").add({
             "summary": final_answer,
             "created_at": datetime.utcnow().isoformat(),
@@ -1288,7 +1340,7 @@ def media_summary():
             "file_url": file_url
         })
 
-        # 9️⃣ Return result
+        # 9️ Return result
         return jsonify({"response": final_answer, "file_url": file_url}), 200
 
     except Exception as e:
@@ -2012,8 +2064,12 @@ def recommend_content():
         - "reason"
         """
 
-        response = model.generate_content(prompt)
-
+        try:
+            response = model.generate_content(prompt)
+        except Exception as e:
+            print(f"Gemini failed oo {e}")
+            response = rec_backup_response(prompt)
+        
         recommendations = []
         try:
             recommendations = json.loads(response.text)
@@ -2227,7 +2283,7 @@ def library(uid):
         user_library_ref = db.collection("users").document(uid).collection("library")
 
         # -----------------------
-        # 📥 POST → Upload documents
+        # POST → Upload documents
         # -----------------------
         if request.method == "POST":
             title = request.form.get("title")
@@ -2260,7 +2316,7 @@ def library(uid):
             return jsonify({"ok": True, "message": "Files uploaded successfully", "file_links": file_links}), 200
 
         # -----------------------
-        # 📤 GET → Retrieve all documents
+        # GET → Retrieve all documents
         # -----------------------
         elif request.method == "GET":
             docs = user_library_ref.order_by("created_at", direction=firestore.Query.DESCENDING).stream()
@@ -2268,7 +2324,7 @@ def library(uid):
             return jsonify({"ok": True, "library": library_items}), 200
 
         # -----------------------
-        # 🗑 DELETE → Delete all library entries
+        # DELETE → Delete all library entries
         # -----------------------
         elif request.method == "DELETE":
             docs = user_library_ref.stream()
@@ -2281,7 +2337,7 @@ def library(uid):
 
 
 # -----------------------
-# ✏️ PUT → Update specific library document (title or files)
+# PUT → Update specific library document (title or files)
 # -----------------------
 @app.route("/library_update/<uid>/<doc_id>", methods=["PUT"])
 def update_library(uid, doc_id):
@@ -2323,7 +2379,7 @@ def update_library(uid, doc_id):
 
 
 # -----------------------
-# ❌ DELETE → Delete specific library document
+# DELETE → Delete specific library document
 # -----------------------
 @app.route("/library_delete/<uid>/<doc_id>", methods=["DELETE"])
 def delete_library_item(uid, doc_id):
