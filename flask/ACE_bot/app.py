@@ -43,9 +43,11 @@ from werkzeug.utils import secure_filename
 import warnings
 import struct
 import wave
-import io
+from io import BytesIO
 import base64
-import mimetypes 
+import mimetypes
+from key_manager import KeyManager 
+
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -215,6 +217,16 @@ TTS_API_KEYS = [
     os.environ.get("ACE_VOICE_BACKUP_2"),     # Backup 2
     os.environ.get("ACE_VOICE_BACKUP_3"),     # Backup 3
 ]
+FINAL_BACKUP = [
+    os.environ.get("BACKUP_1"),             
+    os.environ.get("BACKUP_2"),     
+    os.environ.get("BACKUP_3"),    
+    os.environ.get("BACKUP_4"),
+    os.environ.get("BACKUP_5"),
+    os.environ.get("BACKUP_6"),
+]
+backup_manager = KeyManager(FINAL_BACKUP, model_name="gemini-2.5-flash")
+
 
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 cloudinary.config(
@@ -292,10 +304,37 @@ def extract_text_from_pdf(pdf_path):
         text += page.get_text()
     return text
 
+# --- BACKUP FUNCTION ---
+def final_backup_response(prompt_or_content):
+    """
+    Tries to generate response using the backup key rotation.
+    Accepts plain text OR [prompt, image] list.
+    """
+    try:
+        # Calls the KeyManager to rotate through your 6 FINAL_BACKUP keys
+        response = backup_manager.generate_content(prompt_or_content)
+        return response.text
+    except Exception as e:
+        print(f"All 6 Backup Keys failed: {e}")
+        return "Error: Service temporarily unavailable. Please try again later."
 # ---------- Helper: Image OCR ----------
-def extract_text_from_image(img_path):
-    img = Image.open(img_path)
-    return pytesseract.image_to_string(img)
+
+def extract_text_from_image(image_url):
+    try:
+        # 1. Download the image bytes from Cloudinary
+        response = requests.get(image_url)
+        response.raise_for_status() # Check for download errors
+        
+        # 2. Convert bytes to an Image object
+        img = Image.open(BytesIO(response.content))
+        
+        # 3. Extract text
+        text = pytesseract.image_to_string(img)
+        return text.strip()
+    except Exception as e:
+        print(f"OCR Error: {e}")
+        return ""
+    
 
 def extract_text_from_pdf(file_url):
     r = requests.get(file_url)
@@ -1213,44 +1252,40 @@ def chat_audio(session_id):
 @app.route('/media_summary', methods=['POST'])
 def media_summary():
     try:
-        # 1️ Verify user
+        # --- 1. Auth & Setup ---
         decoded = verify_token_from_request()
         uid = decoded["uid"]
         update_streak(uid)
 
-        # 2️ Check for uploaded file
         if 'file' not in request.files:
             return jsonify({"error": "No file uploaded"}), 400
 
         file = request.files['file']
         filename = file.filename.lower()
 
-        # [FIX] Determine Mime Type for Gemini (Needed for images)
+        # Determine Mime Type (Crucial for passing images to Gemini)
         mime_type, _ = mimetypes.guess_type(filename)
 
-        # 3️ Upload to Cloudinary
-        # This reads the file stream to the end!
+        # --- 2. Upload to Cloudinary ---
         upload_result = cloudinary.uploader.upload(
             file,
             upload_preset="unsigned_summary_file",
             folder=f"file_summaries/{uid}",
-            resource_type="auto"  # auto-detect pdf, image, docx, etc.
+            resource_type="auto"
         )
         file_url = upload_result["secure_url"]
         file_name = upload_result["original_filename"]
 
-        # [FIX] REWIND THE FILE
-        # Crucial: Move the cursor back to the start so we can read it again
+        # --- 3. Rewind File (Crucial!) ---
         file.seek(0)
 
-        # 4️ Extract text OR Prepare for Visual Processing
+        # --- 4. Extract Text OR Flag for Visual Mode ---
         extracted_text = ""
-        is_visual_file = False  # Flag for Images or Scanned PDFs
+        is_visual_file = False 
 
         if filename.endswith(".pdf"):
-            # Try to extract text using your existing function
             extracted_text += extract_text_from_pdf(file_url)
-            # If extraction yields nothing, assume it's a scanned PDF
+            # If text extraction fails, treat as a scanned PDF (Visual)
             if not extracted_text.strip():
                 is_visual_file = True
         
@@ -1261,7 +1296,7 @@ def media_summary():
         elif filename.endswith((".xls", ".xlsx")):
             extracted_text += extract_text_from_excel(file_url)
         
-        # [FIX] Handle Images (JPG, PNG, etc.)
+        # Handle Standard Images
         elif filename.endswith((".jpg", ".jpeg", ".png", ".webp", ".heic")):
             is_visual_file = True
         
@@ -1269,70 +1304,87 @@ def media_summary():
             return jsonify({"error": "Unsupported file type"}), 400
 
 
-        # 5️ Generate Summary (Two Methods)
+        # --- 5. Generate Summary (With 3-Layer Backup) ---
         final_answer = ""
 
-        # Method A: Text-Based Summary (For DOCX, PPTX, Readable PDFs)
+        # === METHOD A: TEXT-BASED SUMMARY ===
         if extracted_text.strip() and not is_visual_file:
-            # Chunking logic
-            def chunk_text(text, max_words=500):
+            # 1. Chunking
+            def chunk_text(text, max_words=1000): # Increased chunk size slightly
                 words = text.split()
                 return [' '.join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
 
             chunks = chunk_text(extracted_text)
             summaries = []
             
+            # 2. Summarize Chunks (Primary Model Only)
             for chunk in chunks:
-                prompt = (
-                    "You are Felix, a helpful academic AI assistant. "
-                    "A student uploaded a study document. "
-                    "Summarize this part clearly and concisely:\n\n"
-                    f"{chunk.strip()}"
-                )
+                chunk_prompt = f"Summarize this section clearly:\n\n{chunk.strip()}"
                 try:
-                    response = model_pdf.generate_content(prompt)
+                    response = model_pdf.generate_content(chunk_prompt)
                     summaries.append(response.text.strip())
                 except Exception as e:
-                    summaries.append(f"(Error in chunk: {str(e)})")
+                    summaries.append("") # Skip bad chunks or handle differently
 
+            # 3. Final Compilation
             full_summary_prompt = (
-                "Summarize the key points from the following summaries:\n\n" +
+                "You are Felix. Create a detailed academic summary from these notes:\n\n" +
                 "\n\n".join(summaries)
             )
 
             try:
+                # LAYER 1: Primary Model
                 final_response = model.generate_content(full_summary_prompt)
                 raw_answer = final_response.text.strip()
-                final_answer = clean_response(raw_answer)
+            
             except Exception as e:
-                print(f"Gemini failed: {e}")
-                raw_answer = generate_backup_response(full_summary_prompt)
-                final_answer = clean_response(raw_answer)
+                print(f"Primary Text Summary Failed: {e}")
+                try:
+                    # LAYER 2: First Backup
+                    raw_answer = generate_backup_response(full_summary_prompt)
+                except Exception as e2:
+                    print(f"First Backup Failed: {e2}")
+                    # LAYER 3: Final 6-Key Backup (Last Resort)
+                    raw_answer = final_backup_response(full_summary_prompt)
 
-        # Method B: Visual Summary (For Images & Scanned PDFs)
+            final_answer = clean_response(raw_answer)
+
+        # === METHOD B: VISUAL SUMMARY (Images/Scanned PDFs) ===
         elif is_visual_file:
             try:
-                # Read the raw bytes from the rewound file
+                # Prepare visual data
                 file_data = file.read()
+                visual_prompt = "You are Felix. Analyze this image/document. Provide a detailed academic summary."
                 
-                prompt = "You are Felix. Analyze this image or document. Extract the text and provide a detailed academic summary of the content."
-                
-                # Send bytes directly to Gemini (Flash supports this natively)
-                response = model_pdf.generate_content([
-                    {"mime_type": mime_type, "data": file_data},
-                    prompt
-                ])
-                final_answer = clean_response(response.text.strip())
-                
+                # Input for Gemini (List of [Prompt, ImageDict])
+                gemini_input = [visual_prompt, {"mime_type": mime_type, "data": file_data}]
+
+                # LAYER 1: Primary Model
+                response = model_pdf.generate_content(gemini_input)
+                raw_answer = response.text.strip()
+
             except Exception as e:
-                 print(f"Visual processing failed: {e}")
-                 return jsonify({"error": "Failed to analyze image/file. It may be too large or unclear."}), 500
+                print(f"Primary Visual Summary Failed: {e}")
+                # Prepare input again (in case it was modified)
+                file.seek(0)
+                file_data = file.read()
+                gemini_input = [visual_prompt, {"mime_type": mime_type, "data": file_data}]
+
+                try:
+                    # LAYER 2: First Backup
+                    raw_answer = generate_backup_response(gemini_input)
+                except Exception as e2:
+                    print(f"First Visual Backup Failed: {e2}")
+                    # LAYER 3: Final 6-Key Backup (Last Resort)
+                    raw_answer = final_backup_response(gemini_input)
+            
+            final_answer = clean_response(raw_answer)
 
         else:
             return jsonify({"error": "Could not extract text from this file."}), 400
 
 
-        # 8️ Save to Firestore
+        # --- 6. Save to Firestore ---
         db.collection("users").document(uid).collection("summaries").add({
             "summary": final_answer,
             "created_at": datetime.utcnow().isoformat(),
@@ -1340,13 +1392,11 @@ def media_summary():
             "file_url": file_url
         })
 
-        # 9️ Return result
         return jsonify({"response": final_answer, "file_url": file_url}), 200
 
     except Exception as e:
         print("Error in /media_summary:", str(e))
         return jsonify({"error": str(e)}), 500
-
 
 @app.route('/get_summaries', methods=['GET'])
 def get_summaries():
@@ -1398,73 +1448,99 @@ def create_chat_quiz():
         if not content:
             return jsonify({"error": "No input text provided"}), 400
 
+        # --- 1. Stronger Prompt ---
         prompt = f"""
-        You are ACE, a helpful AI tutor. Based on the content below, generate 10 quiz flashcards in JSON format. 
-        Each flashcard should include:
-        - "question"
-        - "options" with choices A, B, C, and D
-        - "answer" with the correct option letter
-        Return only valid JSON.
-        \"\"\"{content}\"\"\" 
+        You are ACE, a helpful AI tutor. Based on the content below, generate 10 quiz flashcards.
+        Strictly follow this JSON schema:
+        [
+          {{
+            "question": "string",
+            "options": {{ "A": "...", "B": "...", "C": "...", "D": "..." }},
+            "answer": "A"
+          }}
+        ]
+        Do not add any Markdown formatting like ```json. Just return the raw JSON array.
+        
+        Content:
+        {content}
         """
 
+        quiz_data = []
+
         try:
+            # --- 2. Primary Generation ---
             response = model_cards.generate_content(prompt)
             quiz_raw = response.text.strip()
-
-            # 1. Remove ```json ... ```
-            clean_text = re.sub(r"^```json|```$", "", quiz_raw, flags=re.MULTILINE).strip()
-
-            # 2. Parse into Python object (list of dicts)
-            quiz_data = json.loads(clean_text)
-
-            # 3. Save structured quiz to Firestore
-            doc_ref = db.collection("users").document(uid).collection("quiz").document()
-            doc_ref.set({
-                "quiz": quiz_data,
-                "created_at": datetime.utcnow().isoformat()
-            })
-
-            # 4. Return parsed JSON (frontend-friendly)
-            return jsonify({"quiz": quiz_data}), 200
+            
+            # Robust Parsing
+            start_index = quiz_raw.find('[')
+            end_index = quiz_raw.rfind(']')
+            
+            if start_index != -1 and end_index != -1:
+                json_str = quiz_raw[start_index : end_index + 1]
+                quiz_data = json.loads(json_str)
+            else:
+                raise ValueError("No JSON list found in response")
 
         except Exception as e:
-            print(f"Gemini failed: {e}")
-            backup = generate_backup_response(prompt)
-
-            # try to parse backup if possible
+            print(f"Primary Gemini failed: {e}")
+            
+            # --- 3. Backup Strategy (Added) ---
             try:
-                backup_data = json.loads(backup)
-            except:
-                backup_data = {"raw": backup}
+                # Call your global backup function
+                backup_raw = final_backup_response(prompt)
 
-            doc_ref = db.collection("users").document(uid).collection("quiz").document()
-            doc_ref.set({
-                "quiz": backup_data,
-                "created_at": datetime.utcnow().isoformat()
-            })
+                # Parse Backup Response
+                start_index = backup_raw.find('[')
+                end_index = backup_raw.rfind(']')
+                
+                if start_index != -1 and end_index != -1:
+                    json_str = backup_raw[start_index : end_index + 1]
+                    quiz_data = json.loads(json_str)
+                else:
+                    print("Backup returned invalid JSON")
+            except Exception as backup_error:
+                print(f"Backup also failed: {backup_error}")
+                pass
 
-            return jsonify({"quiz": backup_data}), 200
+        # --- 4. Validation & Saving ---
+        # Ensure we have data (from either Primary or Backup)
+        if not isinstance(quiz_data, list):
+            quiz_data = []
+
+        if not quiz_data:
+            return jsonify({"error": "Failed to generate valid quiz data from AI."}), 500
+
+        # 5. Save structured quiz to Firestore
+        doc_ref = db.collection("users").document(uid).collection("quiz").document()
+        doc_ref.set({
+            "quiz": quiz_data,
+            "created_at": datetime.utcnow().isoformat()
+        })
+
+        # 6. Return result
+        return jsonify({"quiz": quiz_data}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+
 @app.route('/media_quiz', methods=['POST'])
 def media_quiz():
     try:
-        # 1️⃣ Verify user
+        # --- 1. Auth & Setup ---
         decoded = verify_token_from_request()
         uid = decoded["uid"]
         update_streak(uid)
 
-        # 2️⃣ Check for uploaded file (not just PDF)
         if 'file' not in request.files:
             return jsonify({"error": "No file uploaded"}), 400
 
         file = request.files['file']
         filename = file.filename.lower()
 
-        # 3️⃣ Upload file to Cloudinary (auto-detect type)
+        # --- 2. Upload to Cloudinary ---
         upload_result = cloudinary.uploader.upload(
             file,
             upload_preset="unsigned_quiz_uploads",
@@ -1475,56 +1551,95 @@ def media_quiz():
         file_url = upload_result["secure_url"]
         file_name = upload_result["original_filename"]
 
+        # --- 3. Smart Extraction (Text or Image) ---
         extracted_text = ""
-
-        # 4️⃣ Extract text depending on file type
-        if filename.endswith(".pdf"):
-            extracted_text += extract_text_from_pdf(file_url)
-
-        elif filename.endswith(".docx"):
-            extracted_text += extract_text_from_docx(file_url)
-
-        elif filename.endswith(".pptx"):
-            extracted_text += extract_text_from_pptx(file_url)
-
-        elif filename.endswith((".xls", ".xlsx")):
-            extracted_text += extract_text_from_excel(file_url)
-
-        else:
-            return jsonify({"error": "Unsupported file type"}), 400
-
-        if not extracted_text.strip():
-            return jsonify({"error": "No readable text could be extracted from the file."}), 400
-
-        # 5️⃣ Prompt for quiz generation
-        prompt = (
-            "You are ACE, a helpful AI tutor. Based on the study material below, "
-            "generate exactly 10 multiple-choice quiz flashcards in JSON format.\n\n"
-            "Each flashcard must include:\n"
-            "- 'question'\n"
-            "- 'options': list of 4 choices (A, B, C, D)\n"
-            "- 'answer': correct option letter (e.g., 'B')\n\n"
-            "Return only valid JSON, no explanations or notes.\n\n"
-            f"Text:\n\n{extracted_text[:5000]}"
-        )
+        image_part = None  # Stores the image object if we are in Image Mode
 
         try:
-            response = model_cards.generate_content(prompt)
-            quiz_raw = response.text.strip()
+            if filename.endswith(".pdf"):
+                extracted_text = extract_text_from_pdf(file_url)
+            elif filename.endswith(".docx"):
+                extracted_text = extract_text_from_docx(file_url)
+            elif filename.endswith(".pptx"):
+                extracted_text = extract_text_from_pptx(file_url)
+            elif filename.endswith((".xls", ".xlsx")):
+                extracted_text = extract_text_from_excel(file_url)
+            
+            # ✅ Image Support (Native Vision)
+            elif filename.endswith((".png", ".jpg", ".jpeg", ".webp")):
+                response = requests.get(file_url)
+                image_part = Image.open(BytesIO(response.content))
+                extracted_text = "IMAGE_MODE" 
+            else:
+                return jsonify({"error": "Unsupported file type"}), 400
+        except Exception as e:
+            print(f"Extraction error: {e}")
+            return jsonify({"error": "Failed to read document content"}), 400
 
-            # Remove ```json ... ``` wrappers if present
-            clean_text = re.sub(r"^```json|```$", "", quiz_raw, flags=re.MULTILINE).strip()
-            quiz_data = json.loads(clean_text)
+        if not extracted_text:
+            return jsonify({"error": "No readable content found"}), 400
+
+        # --- 4. AI Generation ---
+        base_prompt = (
+            "You are ACE, a helpful AI tutor. Based on the study material provided, "
+            "generate exactly 10 multiple-choice quiz flashcards in JSON format.\n"
+            "Strictly follow this schema:\n"
+            "[{\"question\": \"...\", \"options\": {\"A\": \"...\", \"B\": \"...\", \"C\": \"...\", \"D\": \"...\"}, \"answer\": \"A\"}]\n"
+            "Return ONLY raw JSON. No Markdown."
+        )
+
+        quiz_data = []
+
+        try:
+            # --- Primary Attempt ---
+            if image_part:
+                # Image Mode (Send Prompt + Image)
+                response = model_cards.generate_content([base_prompt, image_part])
+            else:
+                # Text Mode (Limited to 7500 chars)
+                full_prompt = f"{base_prompt}\n\nText:\n{extracted_text[:7500]}"
+                response = model_cards.generate_content(full_prompt)
+
+            raw_response = response.text.strip()
+            
+            # Robust Parsing
+            start = raw_response.find('[')
+            end = raw_response.rfind(']')
+            if start != -1 and end != -1:
+                quiz_data = json.loads(raw_response[start : end + 1])
+            else:
+                raise ValueError("No JSON list found")
 
         except Exception as e:
             print(f"Gemini quiz generation failed: {e}")
-            backup = generate_backup_response(prompt)
+            
+            # --- Backup Strategy (Using KeyManager) ---
             try:
-                quiz_data = json.loads(backup)
-            except:
-                quiz_data = {"raw": backup}
+                # 1. Determine Input for Backup
+                if image_part:
+                    backup_input = [base_prompt, image_part]
+                else:
+                    backup_input = f"{base_prompt}\n\nText:\n{extracted_text[:7500]}"
+                
+                # 2. Call the NEW global backup function
+                backup_raw = final_backup_response(backup_input) # <--- RENAMED CALL
+                
+                # 3. Parse Backup Response
+                start = backup_raw.find('[')
+                end = backup_raw.rfind(']')
+                if start != -1 and end != -1:
+                    quiz_data = json.loads(backup_raw[start : end + 1])
+                else:
+                    print("Backup returned invalid JSON")
+            except Exception as backup_error:
+                print(f"Backup also failed: {backup_error}")
+                pass
 
-        # 6️⃣ Save quiz to Firestore
+        # --- 6. Validation ---
+        if not isinstance(quiz_data, list) or len(quiz_data) == 0:
+             return jsonify({"error": "Could not generate valid quiz."}), 500
+
+        # --- 7. Save & Return ---
         db.collection("users").document(uid).collection("quiz").add({
             "quiz": quiz_data,
             "created_at": datetime.utcnow().isoformat(),
@@ -1532,13 +1647,11 @@ def media_quiz():
             "file_url": file_url
         })
 
-        # 7️⃣ Return result
         return jsonify({"quiz": quiz_data, "file_url": file_url}), 200
 
     except Exception as e:
-        print("Error in /chat_pdf_quiz:", str(e))
+        print("Error in /media_quiz:", str(e))
         return jsonify({"error": str(e)}), 500
-
 
 # ---------- Get All Quizzes ----------
 @app.route('/get_chat_quiz', methods=['GET'])
@@ -1637,94 +1750,131 @@ def save_quiz_score():
         return jsonify({"error": str(e)}), 500
 
 
-#---- Flashcards-----
+
+
+
 @app.route('/media_flashcards', methods=['POST'])
 def media_flashcards():
     try:
-        # 1️⃣ Verify user
+        # --- 1. Auth & Setup ---
         decoded = verify_token_from_request()
         uid = decoded["uid"]
         update_streak(uid)
 
-        # 2️⃣ Check for uploaded file
         if 'file' not in request.files:
             return jsonify({"error": "No file uploaded"}), 400
 
         file = request.files['file']
         filename = file.filename.lower()
 
-        # 3️⃣ Upload file to Cloudinary
+        # --- 2. Upload to Cloudinary ---
         upload_result = cloudinary.uploader.upload(
             file,
             upload_preset="unsigned_flashcards",
             folder=f"flashcards/{uid}",
-            resource_type="auto"  # auto-detect pdf, image, docx, etc.
+            resource_type="auto"
         )
 
         file_url = upload_result["secure_url"]
         file_name = upload_result["original_filename"]
 
+        # --- 3. Smart Extraction (Text or Image) ---
         extracted_text = ""
+        image_part = None  # Stores the image object if we are in Image Mode
 
-        # 4️⃣ Extract text depending on file type
-        if filename.endswith(".pdf"):
-            extracted_text += extract_text_from_pdf(file_url)
+        try:
+            if filename.endswith(".pdf"):
+                extracted_text = extract_text_from_pdf(file_url)
+            elif filename.endswith(".docx"):
+                extracted_text = extract_text_from_docx(file_url)
+            elif filename.endswith(".pptx"):
+                extracted_text = extract_text_from_pptx(file_url)
+            elif filename.endswith((".xls", ".xlsx")):
+                extracted_text = extract_text_from_excel(file_url)
+            
+            # Image Support (Native Vision)
+            elif filename.endswith((".png", ".jpg", ".jpeg", ".webp")):
+                response = requests.get(file_url)
+                image_part = Image.open(BytesIO(response.content))
+                extracted_text = "IMAGE_MODE" 
+            else:
+                return jsonify({"error": "Unsupported file type"}), 400
+                
+        except Exception as e:
+            print(f"Extraction failed: {e}")
+            return jsonify({"error": "Failed to read document text"}), 400
 
-        elif filename.endswith(".docx"):
-            extracted_text += extract_text_from_docx(file_url)
+        if not extracted_text:
+            return jsonify({"error": "No readable content found"}), 400
 
-        elif filename.endswith(".pptx"):
-            extracted_text += extract_text_from_pptx(file_url)
-
-        elif filename.endswith((".xls", ".xlsx")):
-            extracted_text += extract_text_from_excel(file_url)
-
-        else:
-            return jsonify({"error": "Unsupported file type"}), 400
-
-        if not extracted_text.strip():
-            return jsonify({"error": "No readable text could be extracted from the file."}), 400
-
-        # 5️⃣ Generate flashcards with AI
-        flashcard_prompt = (
+        # --- 4. AI Generation ---
+        base_prompt = (
             "You are ACE, a helpful academic AI assistant. "
-            "A student uploaded a study document (PDF, PowerPoint, Excel, or Word). "
-            "From the extracted text below, generate exactly 10 flashcards. "
+            "Generate exactly 10 high-quality flashcards based on the study material. "
             "Return ONLY a valid JSON array of objects with 'question' and 'answer' fields. "
-            "Do not include explanations or any other text.\n\n"
-            "Example:\n"
-            "[{\"question\": \"What is X?\", \"answer\": \"X is ...\"}, ...]\n\n"
-            f"Text:\n\n{extracted_text[:5000]}"
+            "Do not include Markdown formatting (no ```json)."
         )
 
-        try:
-            response = model_pdf.generate_content(flashcard_prompt)
-            raw_flashcards = response.text.strip()
-        except Exception as e:
-            print(f"Flashcard generation failed: {e}")
-            raw_flashcards = generate_backup_response(flashcard_prompt)
-
-        # 6️⃣ Parse response safely
-        match = re.search(r"\[.*\]", raw_flashcards, re.DOTALL)
         flashcards = []
+
         try:
-            if match:
-                flashcards = json.loads(match.group(0))
+            # --- Primary Attempt ---
+            if image_part:
+                # Image Mode
+                response = model_pdf.generate_content([base_prompt, image_part])
             else:
-                flashcards = json.loads(raw_flashcards)
-        except Exception:
-            qa_pairs = re.findall(r"Q[:\-](.*?)A[:\-](.*?)(?=Q[:\-]|$)", raw_flashcards, re.DOTALL)
-            flashcards = [{"question": q.strip(), "answer": a.strip()} for q, a in qa_pairs]
+                # Text Mode (Limited to 7500 chars)
+                final_prompt = f"{base_prompt}\n\nText:\n{extracted_text[:7500]}"
+                response = model_pdf.generate_content(final_prompt)
 
-        # 7️⃣ Ensure 10 cards total
+            raw_response = response.text.strip()
+            
+            # Parsing
+            start = raw_response.find('[')
+            end = raw_response.rfind(']')
+            if start != -1 and end != -1:
+                flashcards = json.loads(raw_response[start : end + 1])
+            else:
+                raise ValueError("No JSON list found")
+
+        except Exception as e:
+            print(f"Primary generation failed: {e}")
+            
+            # --- Backup Strategy ---
+            try:
+                # 1. Determine Input for Backup
+                if image_part:
+                    # Multimodal Backup
+                    backup_input = [base_prompt, image_part]
+                else:
+                    # Text Backup
+                    backup_input = f"{base_prompt}\n\nText:\n{extracted_text[:7500]}"
+                
+                # 2. Call the NEW global backup function name
+                backup_raw = final_backup_response(backup_input)  # <--- RENAMED CALL
+
+                # 3. Parse Backup Response
+                start = backup_raw.find('[')
+                end = backup_raw.rfind(']')
+                if start != -1 and end != -1:
+                    flashcards = json.loads(backup_raw[start : end + 1])
+                else:
+                    print("Backup returned invalid JSON")
+            except Exception as backup_error:
+                print(f"Backup also failed: {backup_error}")
+                pass 
+
+        # --- 6. Validation ---
+        if not isinstance(flashcards, list):
+            flashcards = []
+        
+        if len(flashcards) > 15: 
+            flashcards = flashcards[:15]
+
         if not flashcards:
-            flashcards = [{"question": f"Placeholder Q{i+1}", "answer": "Placeholder A"} for i in range(10)]
-        elif len(flashcards) > 10:
-            flashcards = flashcards[:10]
-        elif len(flashcards) < 10:
-            flashcards += [{"question": f"Extra Q{i+1}", "answer": "Extra A"} for i in range(10 - len(flashcards))]
+            return jsonify({"error": "AI could not generate flashcards from this file"}), 500
 
-        # 8️⃣ Save to Firestore
+        # --- 7. Save & Return ---
         db.collection("users").document(uid).collection("flashcards").add({
             "flashcards": flashcards,
             "created_at": datetime.utcnow().isoformat(),
@@ -1732,53 +1882,89 @@ def media_flashcards():
             "file_url": file_url
         })
 
-        # 9️⃣ Return response
         return jsonify({"flashcards": flashcards, "file_url": file_url}), 200
 
     except Exception as e:
-        print("Error in /media_flashcards:", str(e))
+        print(f"Media Route Error: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/chat_flashcards', methods = ['POST'])
+@app.route('/chat_flashcards', methods=['POST'])
 def chat_flashcards():
     try:
         decoded = verify_token_from_request()
         uid = decoded['uid']
         update_streak(uid)
+        
         data = request.get_json().get("text", "").strip()
         if not data:
-            return jsonify({"error": "no text provided"}),400
+            return jsonify({"error": "no text provided"}), 400
 
         flashcard_prompt = (
-                "You are ACE, a helpful academic AI assistant. "
-                "Based on the content below, generate 10 flashcards in JSON format"
-                "Return ONLY a valid JSON array of objects, where each object has 'question' and 'answer'. "
-                "Do not include Q:/A: labels, explanations, or extra text. "
-                "For example:\n"
-                "[{\"question\": \"What is X?\", \"answer\": \"X is ...\"}, ...]\n\n"
-                f"Text:\n\n{data}"
-            )
+            "You are ACE, a helpful academic AI assistant. "
+            "Based on the content below, generate 10 flashcards in JSON format. "
+            "Return ONLY a valid JSON array of objects, where each object has 'question' and 'answer'. "
+            "Do not include Q:/A: labels, explanations, or extra text. "
+            "For example:\n"
+            "[{\"question\": \"What is X?\", \"answer\": \"X is ...\"}, ...]\n\n"
+            f"Text:\n\n{data}"
+        )
+
+        flashcards = [] # Initialize variable
+
+        # --- 1. Generation & Parsing ---
         try:
             response = model_cards.generate_content(flashcard_prompt)
             flashcard_raw = response.text.strip()
-            flashcards = clean_response(flashcard_raw)
+            
+            # Robust Extraction: Find the list brackets directly
+            start = flashcard_raw.find('[')
+            end = flashcard_raw.rfind(']')
+            
+            if start != -1 and end != -1:
+                json_str = flashcard_raw[start : end + 1]
+                flashcards = json.loads(json_str)
+            else:
+                raise ValueError("No JSON list found in response")
+
         except Exception as e:
-            print(f"Flashcard generation failed: {e}")
-            flashcard_raw = generate_backup_response(flashcard_prompt)
-            flashcards = clean_response(flashcard_raw)
+            print(f"Primary Flashcard generation failed: {e}")
+            
+            # --- 2. Backup Handling ---
+            # Assuming generate_backup_response returns a string
+            backup_raw = final_backup_response(flashcard_prompt)
+            
+            # Try to parse backup, or fail gracefully
+            try:
+                start = backup_raw.find('[')
+                end = backup_raw.rfind(']')
+                if start != -1 and end != -1:
+                    flashcards = json.loads(backup_raw[start : end + 1])
+                else:
+                    # Fallback if backup is not JSON: wrap raw text in a single card
+                    flashcards = [{"question": "Summary", "answer": backup_raw}]
+            except:
+                flashcards = [{"question": "Error", "answer": "Could not generate flashcards."}]
 
-            db.collection("users").document(uid).collection("flashcards").add({
-                "flashcards": flashcards,
-                "created_at": datetime.utcnow().isoformat()
-            })
-
-            # 6. Return to frontend
-            return jsonify({"flashcards": flashcards}), 200
-    except Exception as e:
-        return jsonify({"error":str(e)}),400
-
+        # --- 3. Save & Return (NOW UN-INDENTED) ---
+        # This code now runs regardless of whether the Try or Except block executed.
         
+        # Validation: Ensure we actually have a list before saving
+        if not isinstance(flashcards, list):
+            flashcards = []
 
+        db.collection("users").document(uid).collection("flashcards").add({
+            "flashcards": flashcards,
+            "created_at": datetime.utcnow().isoformat()
+        })
+
+        return jsonify({"flashcards": flashcards}), 200
+
+    except Exception as e:
+        print(f"Critical Route Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+    
 
 @app.route('/get_flashcards', methods=['GET'])
 def get_flashcards():
@@ -1860,7 +2046,7 @@ def create_study_plan():
         uid = decoded["uid"]
         update_streak(uid)
 
-        # Accept form-data (title, due_date, description, files)
+        # Accept form-data
         title = request.form.get("title")
         start_date = request.form.get("start_date")
         due_date = request.form.get("due_date")
@@ -1876,18 +2062,23 @@ def create_study_plan():
                 file,
                 upload_preset="unsigned_study_plans",
                 folder=f"study_plans/{uid}",
-                resource_type="auto"  # auto-detect image/pdf
+                resource_type="auto"
             )
             file_url = upload_result["secure_url"]
             file_name = upload_result["original_filename"]
 
             file_links.append({"name": file_name, "url": file_url})
 
-            # ---------- Extract text ----------
-            if file_name.lower().endswith(".pdf"):
-                extracted_text += extract_text_from_pdf(file_url)
-            elif file_name.lower().endswith((".png", ".jpg", ".jpeg")):
-                extracted_text += extract_text_from_image(file_url)
+            # ---------- Extract text (PDF/Docs only) ----------
+            # Note: We removed extract_text_from_image to avoid Tesseract crashes.
+            # If you need image support here later, we can add Single-Image Native Vision.
+            try:
+                if file_name.lower().endswith(".pdf"):
+                    extracted_text += extract_text_from_pdf(file_url)
+                elif file_name.lower().endswith((".docx", ".doc")):
+                    extracted_text += extract_text_from_docx(file_url)
+            except Exception as e:
+                print(f"Failed to extract text from {file_name}: {e}")
 
         # ---------- Generate study plan ----------
         prompt = f"""
@@ -1896,7 +2087,7 @@ def create_study_plan():
         Start date: {start_date}.
         Due date: {due_date}.
         Description: {description}.
-        Notes/Materials: {extracted_text[:2000]}
+        Notes/Materials: {extracted_text[:7500]} 
 
         Please create a day-by-day study plan starting from the Start date in this exact format:
         Day 1: Topic 1, Topic 2
@@ -1906,9 +2097,17 @@ def create_study_plan():
         Continue until the Due date.
         """
 
-        response = reminder_model.generate_content(prompt)
-        text = getattr(response, "text", None) or str(response)
-        study_plan = parse_study_plan(text)
+        try:
+            # Primary Generation
+            response = reminder_model.generate_content(prompt)
+            text_output = response.text
+        except Exception as e:
+            print(f"Primary Study Plan Gen failed: {e}")
+            # Final Backup Logic
+            text_output = final_backup_response(prompt)
+
+        # Parse the result (whether from Primary or Backup)
+        study_plan = parse_study_plan(text_output)
 
         # ---------- Save to Firestore ----------
         reminder_ref = db.collection("users").document(uid).collection("reminders").document()
@@ -1916,7 +2115,7 @@ def create_study_plan():
             "title": title,
             "due_date": due_date,
             "description": description,
-            "files": file_links,  # only Cloudinary URLs
+            "files": file_links,
             "study_plan": study_plan,
             "completed": False,
             "created_at": firestore.SERVER_TIMESTAMP,
@@ -1925,6 +2124,7 @@ def create_study_plan():
         return jsonify({"ok": True, "study_plan": study_plan, "files": file_links})
 
     except Exception as e:
+        print(f"Study Plan Error: {e}")
         return jsonify({"error": str(e)}), 400
 
 
