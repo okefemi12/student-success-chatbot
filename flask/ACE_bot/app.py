@@ -331,70 +331,90 @@ def extract_text_from_image(image_url):
     
 
 def extract_text_from_pdf(file_url):
+    """Extract text from PDF URL without saving to disk"""
     try:
-        response= requests.get(file_url)
+        response = requests.get(file_url, timeout=30)
         response.raise_for_status()
-        #Load the PDF in memeory stream 
-        with BytesIO(response.content) as open_pdf_file:
-            reader = PdfReader(open_pdf_file)
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text() or ""
-        return text
+        
+        # Read PDF directly from bytes in memory
+        pdf_file = io.BytesIO(response.content)
+        reader = PdfReader(pdf_file)
+        
+        text = ""
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+        
+        return text.strip()
+        
     except Exception as e:
-        print(f"PDF Extraction Error:{e}")
+        print(f"PDF extraction error: {e}")
         return ""
-            
 
 
 def extract_text_from_docx(file_url):
+    """Extract text from DOCX URL without saving to disk"""
     try:
-        response = requests.get(file_url)
+        response = requests.get(file_url, timeout=30)
         response.raise_for_status()
         
-        # Load DOCX into memory stream
-        with BytesIO(response.content) as open_docx_file:
-            doc = Document(open_docx_file)
-            text = "\n".join(p.text for p in doc.paragraphs)
-        return text
+        # Read DOCX directly from bytes in memory
+        docx_file = io.BytesIO(response.content)
+        doc = Document(docx_file)
+        
+        text = "\n".join(paragraph.text for paragraph in doc.paragraphs if paragraph.text.strip())
+        return text.strip()
+        
     except Exception as e:
-        print(f"DOCX Extraction Error: {e}")
+        print(f"DOCX extraction error: {e}")
         return ""
 
 
 def extract_text_from_pptx(file_url):
-    import requests
-    from pptx import Presentation
-    r = requests.get(file_url)
-    with open("temp.pptx", "wb") as f:
-        f.write(r.content)
-    prs = Presentation("temp.pptx")
-    text = ""
-    for slide in prs.slides:
-        for shape in slide.shapes:
-            if hasattr(shape, "text"):
-                text += shape.text + "\n"
-    os.remove("temp.pptx")
-    return text
+    """Extract text from PPTX URL without saving to disk"""
+    try:
+        response = requests.get(file_url, timeout=30)
+        response.raise_for_status()
+        
+        # Read PPTX directly from bytes in memory
+        pptx_file = io.BytesIO(response.content)
+        prs = Presentation(pptx_file)
+        
+        text = ""
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if hasattr(shape, "text"):
+                    text += shape.text + "\n"
+        
+        return text.strip()
+        
+    except Exception as e:
+        print(f"PPTX extraction error: {e}")
+        return ""
 
 
 def extract_text_from_excel(file_url):
+    """Extract text from Excel URL without saving to disk"""
     try:
-        response = requests.get(file_url)
+        response = requests.get(file_url, timeout=30)
         response.raise_for_status()
         
-        # Load Excel into memory stream
-        with BytesIO(response.content) as open_xlsx_file:
-            wb = load_workbook(open_xlsx_file, data_only=True)
-            text = ""
-            for sheet in wb.worksheets:
-                for row in sheet.iter_rows(values_only=True):
-                    # Convert row cells to string, filtering out None
-                    row_text = " ".join(str(cell) for cell in row if cell is not None)
+        # Read Excel directly from bytes in memory
+        excel_file = io.BytesIO(response.content)
+        wb = load_workbook(excel_file)
+        
+        text = ""
+        for sheet in wb.worksheets:
+            for row in sheet.iter_rows(values_only=True):
+                row_text = " ".join(str(cell) for cell in row if cell is not None)
+                if row_text.strip():
                     text += row_text + "\n"
-        return text
+        
+        return text.strip()
+        
     except Exception as e:
-        print(f"Excel Extraction Error: {e}")
+        print(f"Excel extraction error: {e}")
         return ""
 
 
@@ -1773,7 +1793,58 @@ def media_flashcards():
         file = request.files['file']
         filename = file.filename.lower()
 
-        # --- 2. Upload to Cloudinary ---
+        # --- 2. Extract text FIRST (before uploading) ---
+        extracted_text = ""
+        image_part = None
+
+        try:
+            if filename.endswith(".pdf"):
+                # Read directly from upload
+                file.seek(0)
+                reader = PdfReader(file)
+                for page in reader.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        extracted_text += page_text + "\n"
+                
+            elif filename.endswith(".docx"):
+                file.seek(0)
+                doc = Document(file)
+                extracted_text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                
+            elif filename.endswith(".pptx"):
+                file.seek(0)
+                prs = Presentation(file)
+                for slide in prs.slides:
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text"):
+                            extracted_text += shape.text + "\n"
+                            
+            elif filename.endswith((".xls", ".xlsx")):
+                file.seek(0)
+                wb = load_workbook(file)
+                for sheet in wb.worksheets:
+                    for row in sheet.iter_rows(values_only=True):
+                        row_text = " ".join(str(cell) for cell in row if cell)
+                        if row_text.strip():
+                            extracted_text += row_text + "\n"
+            
+            elif filename.endswith((".png", ".jpg", ".jpeg", ".webp")):
+                file.seek(0)
+                image_part = Image.open(file)
+                extracted_text = "IMAGE_MODE"
+            else:
+                return jsonify({"error": "Unsupported file type"}), 400
+                
+        except Exception as e:
+            print(f"Extraction error: {e}")
+            return jsonify({"error": "Failed to read document text"}), 400
+
+        if not extracted_text:
+            return jsonify({"error": "No readable content found"}), 400
+
+        # --- 3. NOW upload to Cloudinary for storage ---
+        file.seek(0)  # Reset file pointer
         upload_result = cloudinary.uploader.upload(
             file,
             upload_preset="unsigned_flashcards",
@@ -1783,35 +1854,6 @@ def media_flashcards():
 
         file_url = upload_result["secure_url"]
         file_name = upload_result["original_filename"]
-
-        # --- 3. Smart Extraction (Text or Image) ---
-        extracted_text = ""
-        image_part = None  # Stores the image object if we are in Image Mode
-
-        try:
-            if filename.endswith(".pdf"):
-                extracted_text = extract_text_from_pdf(file_url)
-            elif filename.endswith(".docx"):
-                extracted_text = extract_text_from_docx(file_url)
-            elif filename.endswith(".pptx"):
-                extracted_text = extract_text_from_pptx(file_url)
-            elif filename.endswith((".xls", ".xlsx")):
-                extracted_text = extract_text_from_excel(file_url)
-            
-            # Image Support (Native Vision)
-            elif filename.endswith((".png", ".jpg", ".jpeg", ".webp")):
-                response = requests.get(file_url)
-                image_part = Image.open(BytesIO(response.content))
-                extracted_text = "IMAGE_MODE" 
-            else:
-                return jsonify({"error": "Unsupported file type"}), 400
-                
-        except Exception as e:
-            print(f"Extraction failed: {e}")
-            return jsonify({"error": "Failed to read document text"}), 400
-
-        if not extracted_text:
-            return jsonify({"error": "No readable content found"}), 400
 
         # --- 4. AI Generation ---
         base_prompt = (
@@ -1856,8 +1898,8 @@ def media_flashcards():
                     # Text Backup
                     backup_input = f"{base_prompt}\n\nText:\n{extracted_text[:7500]}"
                 
-                # 2. Call the NEW global backup function name
-                backup_raw = final_backup_response(backup_input)  # <--- RENAMED CALL
+                # 2. Call the global backup function
+                backup_raw = final_backup_response(backup_input)
 
                 # 3. Parse Backup Response
                 start = backup_raw.find('[')
@@ -1870,7 +1912,7 @@ def media_flashcards():
                 print(f"Backup also failed: {backup_error}")
                 pass 
 
-        # --- 6. Validation ---
+        # --- 5. Validation ---
         if not isinstance(flashcards, list):
             flashcards = []
         
@@ -1880,7 +1922,7 @@ def media_flashcards():
         if not flashcards:
             return jsonify({"error": "AI could not generate flashcards from this file"}), 500
 
-        # --- 7. Save & Return ---
+        # --- 6. Save & Return ---
         db.collection("users").document(uid).collection("flashcards").add({
             "flashcards": flashcards,
             "created_at": datetime.utcnow().isoformat(),
