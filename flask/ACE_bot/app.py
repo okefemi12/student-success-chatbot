@@ -296,13 +296,7 @@ def search_web(query):
 
     return links
 
-# ---------- Helper: PDF text extraction ----------
-def extract_text_from_pdf(pdf_path):
-    text = ""
-    doc = fitz.open(pdf_path)
-    for page in doc:
-        text += page.get_text()
-    return text
+
 
 # --- BACKUP FUNCTION ---
 def final_backup_response(prompt_or_content):
@@ -337,27 +331,35 @@ def extract_text_from_image(image_url):
     
 
 def extract_text_from_pdf(file_url):
-    r = requests.get(file_url)
-    with open("temp.pdf", "wb") as f:
-        f.write(r.content)
-    reader = PdfReader("temp.pdf")
-    text = ""
-    for page in reader.pages:
-        text += page.extract_text() or ""
-    os.remove("temp.pdf")
-    return text
+    try:
+        response= requests.get(file_url)
+        response.raise_for_status()
+        #Load the PDF in memeory stream 
+        with BytesIO(response.content) as open_pdf_file:
+            reader = PdfReader(open_pdf_file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() or ""
+        return text
+    except Exception as e:
+        print(f"PDF Extraction Error:{e}")
+        return ""
+            
 
 
 def extract_text_from_docx(file_url):
-    import requests
-    from docx import Document
-    r = requests.get(file_url)
-    with open("temp.docx", "wb") as f:
-        f.write(r.content)
-    doc = Document("temp.docx")
-    text = "\n".join(p.text for p in doc.paragraphs)
-    os.remove("temp.docx")
-    return text
+    try:
+        response = requests.get(file_url)
+        response.raise_for_status()
+        
+        # Load DOCX into memory stream
+        with BytesIO(response.content) as open_docx_file:
+            doc = Document(open_docx_file)
+            text = "\n".join(p.text for p in doc.paragraphs)
+        return text
+    except Exception as e:
+        print(f"DOCX Extraction Error: {e}")
+        return ""
 
 
 def extract_text_from_pptx(file_url):
@@ -377,19 +379,23 @@ def extract_text_from_pptx(file_url):
 
 
 def extract_text_from_excel(file_url):
-    import requests
-    from openpyxl import load_workbook
-    r = requests.get(file_url)
-    with open("temp.xlsx", "wb") as f:
-        f.write(r.content)
-    wb = load_workbook("temp.xlsx")
-    text = ""
-    for sheet in wb.worksheets:
-        for row in sheet.iter_rows(values_only=True):
-            row_text = " ".join(str(cell) for cell in row if cell is not None)
-            text += row_text + "\n"
-    os.remove("temp.xlsx")
-    return text
+    try:
+        response = requests.get(file_url)
+        response.raise_for_status()
+        
+        # Load Excel into memory stream
+        with BytesIO(response.content) as open_xlsx_file:
+            wb = load_workbook(open_xlsx_file, data_only=True)
+            text = ""
+            for sheet in wb.worksheets:
+                for row in sheet.iter_rows(values_only=True):
+                    # Convert row cells to string, filtering out None
+                    row_text = " ".join(str(cell) for cell in row if cell is not None)
+                    text += row_text + "\n"
+        return text
+    except Exception as e:
+        print(f"Excel Extraction Error: {e}")
+        return ""
 
 
 TTS_API_KEYS = [key for key in TTS_API_KEYS if key]
