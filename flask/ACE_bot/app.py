@@ -1857,10 +1857,14 @@ def media_flashcards():
 
         # --- 4. AI Generation ---
         base_prompt = (
-            "You are ACE, a helpful academic AI assistant. "
-            "Generate exactly 10 high-quality flashcards based on the study material. "
-            "Return ONLY a valid JSON array of objects with 'question' and 'answer' fields. "
-            "Do not include Markdown formatting (no ```json)."
+            "You are ACE. Generate flashcards based on the study material in JSON format.\n"
+            "Rules for Quantity:\n"
+            "- If the content is SHORT, generate exactly 10 cards.\n"
+            "- If the content is EXTENSIVE, generate up to 25 cards.\n"
+            "- Do not repeat facts.\n\n"
+            "Strictly follow this schema:\n"
+            "[{\"question\": \"...\", \"answer\": \"...\"}]\n"
+            "Return ONLY raw JSON. No Markdown."
         )
 
         flashcards = []
@@ -1948,13 +1952,15 @@ def chat_flashcards():
             return jsonify({"error": "no text provided"}), 400
 
         flashcard_prompt = (
-            "You are ACE, a helpful academic AI assistant. "
-            "Based on the content below, generate 10 flashcards in JSON format. "
-            "Return ONLY a valid JSON array of objects, where each object has 'question' and 'answer'. "
-            "Do not include Q:/A: labels, explanations, or extra text. "
-            "For example:\n"
-            "[{\"question\": \"What is X?\", \"answer\": \"X is ...\"}, ...]\n\n"
-            f"Text:\n\n{data}"
+            "You are ACE, a helpful academic AI assistant."
+            "Based on the content below, generate flashcards in JSON format.\n"
+            "Rules for Quantity:\n"
+            "- If the content is SHORT (under 500 words), generate exactly 10 high-quality cards."
+            "- If the content is LONG, generate up to 25 cards."
+            "Strictly follow this JSON schema:\n"
+            "[{\"question\": \"What is X?\", \"answer\": \"X is ...\"}, ...]\n"
+            "Return ONLY raw JSON. No Markdown or explanation text.\n\n"
+            f"Content:\n{data}"
         )
 
         flashcards = [] # Initialize variable
