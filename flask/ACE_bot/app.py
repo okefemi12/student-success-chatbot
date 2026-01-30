@@ -502,7 +502,7 @@ def generate_audio_with_retry(text, max_retries=None):
                 speech_config=types.SpeechConfig(
                     voice_config=types.VoiceConfig(
                         prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name="Sadachbia"
+                            voice_name="Charon"
                         )
                     )
                 )
@@ -513,7 +513,7 @@ def generate_audio_with_retry(text, max_retries=None):
             
             # Generate stream
             for chunk in tts_client.models.generate_content_stream(
-                model="gemini-2.5-flash", # Ensure model name is correct (remove -preview-tts if needed)
+                model="gemini-2.5-flash-preview-tts", 
                 contents=tts_contents,
                 config=tts_config
             ):
@@ -902,7 +902,6 @@ def create_chat_session():
             "created_at": firestore.SERVER_TIMESTAMP,
             "title": None  # will be auto-set on first user message
         })
-
         return jsonify({"ok": True, "session_id": session_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -1591,7 +1590,7 @@ def media_quiz():
             elif filename.endswith((".xls", ".xlsx")):
                 extracted_text = extract_text_from_excel(file_url)
             
-            # ✅ Image Support (Native Vision)
+            # Image Support (Native Vision)
             elif filename.endswith((".png", ".jpg", ".jpeg", ".webp")):
                 response = requests.get(file_url)
                 image_part = Image.open(BytesIO(response.content))
@@ -1607,8 +1606,13 @@ def media_quiz():
 
         # --- 4. AI Generation ---
         base_prompt = (
-            "You are ACE, a helpful AI tutor. Based on the study material provided, "
-            "generate exactly 10 multiple-choice quiz flashcards in JSON format.\n"
+            "You are FELIX, a helpful AI tutor. Based on the study material provided,"
+            "generate a comprehensive multiple-choice quiz in JSON format.\n"
+            "Rules for Quantity:\n"
+            "- If the content is SHORT (under 3 pages), generate 10-15 questions.\n"
+            "- If the content is EXTENSIVE (long docs, whole chapters), generate 20-30 questions.\n"
+            "- CRITICAL: Ensure you cover the BEGINNING, MIDDLE, and END of the content"
+            "- Do not repeat questions.\n\n"
             "Strictly follow this schema:\n"
             "[{\"question\": \"...\", \"options\": {\"A\": \"...\", \"B\": \"...\", \"C\": \"...\", \"D\": \"...\"}, \"answer\": \"A\"}]\n"
             "Return ONLY raw JSON. No Markdown."
@@ -1622,8 +1626,8 @@ def media_quiz():
                 # Image Mode (Send Prompt + Image)
                 response = model_cards.generate_content([base_prompt, image_part])
             else:
-                # Text Mode (Limited to 7500 chars)
-                full_prompt = f"{base_prompt}\n\nText:\n{extracted_text[:7500]}"
+                # Text Mode 
+                full_prompt = f"{base_prompt}\n\nText:\n{extracted_text[:50000]}"
                 response = model_cards.generate_content(full_prompt)
 
             raw_response = response.text.strip()
@@ -1645,7 +1649,7 @@ def media_quiz():
                 if image_part:
                     backup_input = [base_prompt, image_part]
                 else:
-                    backup_input = f"{base_prompt}\n\nText:\n{extracted_text[:7500]}"
+                    backup_input = f"{base_prompt}\n\nText:\n{extracted_text[:50000]}"
                 
                 # 2. Call the NEW global backup function
                 backup_raw = final_backup_response(backup_input) # <--- RENAMED CALL
@@ -1859,8 +1863,9 @@ def media_flashcards():
         base_prompt = (
             "You are ACE. Generate flashcards based on the study material in JSON format.\n"
             "Rules for Quantity:\n"
-            "- If the content is SHORT, generate exactly 10 cards.\n"
-            "- If the content is EXTENSIVE, generate up to 25 cards.\n"
+            "- If the content is SHORT, generate exactly 10-15 cards.\n"
+            "- If the content is EXTENSIVE, generate up to 25-50 cards.\n"
+            "-Ensure you cover the BEGINNING, MIDDLE, and END of the content"
             "- Do not repeat facts.\n\n"
             "Strictly follow this schema:\n"
             "[{\"question\": \"...\", \"answer\": \"...\"}]\n"
@@ -1876,7 +1881,7 @@ def media_flashcards():
                 response = model_pdf.generate_content([base_prompt, image_part])
             else:
                 # Text Mode (Limited to 7500 chars)
-                final_prompt = f"{base_prompt}\n\nText:\n{extracted_text[:7500]}"
+                final_prompt = f"{base_prompt}\n\nText:\n{extracted_text[:50000]}"
                 response = model_pdf.generate_content(final_prompt)
 
             raw_response = response.text.strip()
@@ -1900,7 +1905,7 @@ def media_flashcards():
                     backup_input = [base_prompt, image_part]
                 else:
                     # Text Backup
-                    backup_input = f"{base_prompt}\n\nText:\n{extracted_text[:7500]}"
+                    backup_input = f"{base_prompt}\n\nText:\n{extracted_text[:50000]}"
                 
                 # 2. Call the global backup function
                 backup_raw = final_backup_response(backup_input)
@@ -1920,8 +1925,8 @@ def media_flashcards():
         if not isinstance(flashcards, list):
             flashcards = []
         
-        if len(flashcards) > 15: 
-            flashcards = flashcards[:15]
+        if len(flashcards) > 50: 
+            flashcards = flashcards[:50]
 
         if not flashcards:
             return jsonify({"error": "AI could not generate flashcards from this file"}), 500
@@ -1956,7 +1961,7 @@ def chat_flashcards():
             "Based on the content below, generate flashcards in JSON format.\n"
             "Rules for Quantity:\n"
             "- If the content is SHORT (under 500 words), generate exactly 10 high-quality cards."
-            "- If the content is LONG, generate up to 25 cards."
+            "- If the content is LONG, generate up to 50 cards."
             "Strictly follow this JSON schema:\n"
             "[{\"question\": \"What is X?\", \"answer\": \"X is ...\"}, ...]\n"
             "Return ONLY raw JSON. No Markdown or explanation text.\n\n"
