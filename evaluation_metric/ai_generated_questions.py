@@ -41,4 +41,4 @@ Return only one of these levels.
 # ---------- Save labeled data ----------
 data["bloom_level"] = bloom_levels
 data.to_csv("ai_generated_questions_labeled.csv", index=False)
-print("\n✅ Saved labeled file: ai_generated_questions_labeled.csv")
+print("\nSaved labeled file: ai_generated_questions_labeled.csv")

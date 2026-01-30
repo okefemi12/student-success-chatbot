@@ -37,7 +37,7 @@ for user in users:
 
         for msg in messages:
             msg_data = msg.to_dict()
-            # ✅ Extract AI responses (assistant role)
+            # Extract AI responses (assistant role)
             if msg_data.get("role") == "assistant":
                 data.append({
                     "question": msg_data.get("content", ""),
@@ -48,4 +48,4 @@ for user in users:
 df = pd.DataFrame(data)
 df.to_csv("ai_generated_questions.csv", index=False)
 
-print(f"✅ Exported {len(data)} assistant responses to ai_generated_questions.csv")
+print(f"Exported {len(data)} assistant responses to ai_generated_questions.csv")
