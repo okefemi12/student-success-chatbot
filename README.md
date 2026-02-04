@@ -1,45 +1,65 @@
-
 # 🧠 Student Success Chatbot (ACE Bot)
 
-A smart **Flask-based chatbot** that helps students plan, track, and improve their academic performance.  
-It supports **PDF and image uploads**, extracts study materials via OCR and NLP, and stores chat data securely in **Firestore**.  
-Images and files are hosted on **Cloudinary**.
+A comprehensive **AI-powered academic assistant** designed to help students plan, track, and improve their academic performance.
+
+The system combines a **modular Flask backend** with a robust **XGBoost Machine Learning model** to predict student success probabilities (94.4% accuracy). It features real-time chat, automated study planning, document analysis (OCR), and gamification, all deployed securely on the cloud.
 
 ---
 
-## 🚀 Features
-- 📚 **AI-powered chat assistant** for academic help and study planning  
-- 🧾 **PDF and image upload support** (text extraction via PyMuPDF & Tesseract OCR)  
-- ☁️ **Firestore** for storing user chats, sessions, and metadata  
-- 🖼️ **Cloudinary integration** for secure media hosting  
-- 🧠 **ML model integration** (`student_prediction_model.pkl`) for performance prediction  
-- 🔐 **JWT authentication** for user validation  
-- 🧰 **LangChain + Gemini + Cohere + OpenAI** support for advanced reasoning  
-- 🧑‍💻 **Deployed on Render** using Docker  
+## 🚀 Key Features
+
+### 🤖 AI & Machine Learning
+* **Performance Prediction:** Integrated XGBoost model predicts pass/fail probability based on live user data (study habits, attendance, sleep).
+* **Smart Tutoring:** Generates personalized study plans and flashcards using **Google Gemini** and **OpenAI**.
+* **Adaptive Quizzes:** Automatically generates quizzes from uploaded notes (PDF/DOCX/Images) or chat topics.
+* **Content Recommendations:** Suggests relevant YouTube videos based on the user's course and weak subjects.
+
+### 🛠️ Core Functionality
+* **Multi-Modal Chat:** Supports text and voice interactions (Speech-to-Text & Text-to-Speech).
+* **Document Analysis:** Extracts text from PDFs, Word docs, PowerPoints, and Images using **PyMuPDF** & **Tesseract OCR**.
+* **Cloud Storage:**
+    * **Firestore:** Securely stores user profiles, chat history, and study logs.
+    * **Cloudinary:** Hosts uploaded documents and handles file format management for the frontend.
+* **Gamification:** Tracks streaks, awards badges, and levels up users based on study consistency.
+* **Modular Architecture:** Clean, scalable "Modular Monolith" code structure using Flask Blueprints.
 
 ---
 
 ## 🧩 Project Structure
-```
 
-student-success-chatbot/
+The project is organized into a modular structure for maintainability and scalability:
+
+```text
+flask/ACE_bot/
+├── app.py                   # Application entry point
+├── config.py                # Environment configuration
+├── extensions.py            # Database & external service initialization
+├── key_manager.py           # API key rotation logic for reliability
 │
-├── Dockerfile
-├── .dockerignore
-├── flask/
-│   └── ACE_bot/
-│       ├── app.py
-│       ├── requirements.txt
-│       ├── model/
-│       │   └── student_prediction_model.pkl
-│       ├── templates/
-│       │   └── index.html
-│       ├── static/               # (optional: JS/CSS files)
-│       └── routes/               # (optional: organized endpoints)
-└── README.md
-
-````
-
+├── routes/                  # API Endpoints (Blueprints)
+│   ├── auth.py              # User authentication, profile, & activity logging
+│   ├── chat.py              # Chatbot logic, history, & audio processing
+│   ├── study_tools.py       # Summaries, Library, Reminders, & Recommendations
+│   └── quizzes.py           # Quiz generation, flashcards, & scoring
+│
+├── services/                # Core Logic
+│   ├── ai_engine.py         # LLM integration (Gemini/Groq) & ML pipeline
+│   ├── audio_service.py     # TTS & STT services
+│   └── doc_processor.py     # OCR & file extraction (PDF, DOCX, IMG)
+│
+├── utils/                   # Helpers
+│   └── helpers.py           # Token verification & data sanitization
+│
+├── model/                   # Machine Learning Artifacts
+│   └── student_prediction_model.pkl  # XGBoost model
+│
+├── Notebook/                # Data Science Work
+│   └── prediction-model.ipynb        # Model training & analysis notebook
+│
+├── templates/               # HTML templates
+├── requirements.txt         # Python dependencies
+├── Dockerfile               # Container configuration
+└── .dockerignore
 ---
 
 ## ⚙️ Installation (Local Development)
@@ -162,5 +182,4 @@ Make sure this file is available when deploying (it’s included via `.dockerign
 * **ML / AI:** Scikit-learn, LangChain, OpenAI, Gemini, XGBOOST Classifier
 * **OCR:** PyMuPDF, Pytesseract
 * **Deployment:** Render + Docker , Cloud(soon)
-
 

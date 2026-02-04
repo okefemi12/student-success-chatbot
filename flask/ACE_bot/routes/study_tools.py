@@ -85,7 +85,7 @@ def media_summary():
         # === METHOD A: TEXT-BASED SUMMARY ===
         if extracted_text.strip() and not is_visual_file:
             # 1. Chunking
-            def chunk_text(text, max_words=1000): # Increased chunk size slightly
+            def chunk_text(text, max_words=2000): # Increased chunk size slightly
                 words = text.split()
                 return [' '.join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
 
@@ -103,7 +103,7 @@ def media_summary():
 
             # 3. Final Compilation
             full_summary_prompt = (
-                "You are Felix. Create a detailed academic summary from these notes:\n\n" +
+                "Create a detailed academic summary from these notes:\n\n" +
                 "\n\n".join(summaries)
             )
 
