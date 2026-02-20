@@ -12,6 +12,7 @@ from utils.helpers import verify_token_from_request, clean_response, update_stre
 from services.doc_processor import extract_text_from_pdf, extract_text_from_docx, extract_text_from_pptx, extract_text_from_excel
 from services.ai_engine import model, model_pdf, reminder_model, generate_backup_response, final_backup_response, rec_backup_response, pipeline, YOUTUBE_API_KEY
 import requests
+from youtube_search import YoutubeSearch
 
 study_bp = Blueprint('study', __name__)
 
@@ -442,6 +443,7 @@ def library(uid):
     try:
         decoded = verify_token_from_request()
         uid = decoded["uid"]
+        update_streak(uid)
         user_library_ref = db.collection("users").document(uid).collection("library")
 
         # -----------------------
@@ -556,6 +558,7 @@ def delete_library_item(uid, doc_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
+
 @study_bp.route("/recommendations", methods=["GET"])
 def recommend_content():
     try:
@@ -571,69 +574,98 @@ def recommend_content():
         course = user_data.get("course_of_study", "")
         subjects = user_data.get("subject", [])
         if isinstance(subjects, str):
-            subjects = [subjects]
+            subjects = [s.strip() for s in subjects.split(",")]
 
-        if not course and not subjects:
-            return jsonify({"error": "No course_of_study or subjects found in profile"}), 400
+        # Determine queries. Fallback to course or general tips if subjects are empty
+        queries = subjects if subjects else ([course] if course else ["Study motivation and productivity tips"])
 
-        # 2. Build query
-        query_topics = [course] + subjects
-        search_query = " ".join(query_topics)
+        # To prevent long loading times, limit to maximum 3 subjects at a time
+        queries = queries[:3] 
 
-        # 3. Fetch YouTube videos
-        youtube_url = "https://www.googleapis.com/youtube/v3/search"
-        params = {
-            "part": "snippet",
-            "q": search_query,
-            "key": YOUTUBE_API_KEY,
-            "maxResults": 5,
-            "type": "video"
-        }
-        yt_response = requests.get(youtube_url, params=params).json()
+        all_fetched_videos = []
 
-        if "items" not in yt_response:
-            return jsonify({"error": "No results from YouTube"}), 400
+        # 2. Fetch YouTube videos for EACH subject separately
+        for query in queries:
+            search_term = f"{course} {query}".strip() if course else query
+            try:
+                # Fetch top 3 videos per subject
+                yt_results = YoutubeSearch(search_term, max_results=3).to_dict()
+                for item in yt_results:
+                    all_fetched_videos.append({
+                        "subject": query, 
+                        "title": item.get("title", "YouTube Video"),
+                        "url": f"https://www.youtube.com{item.get('url_suffix')}"
+                    })
+            except Exception as e:
+                print(f"YouTube Search Failed for {query}: {e}")
+                continue
 
-        videos = [
-            {
-                "title": item["snippet"]["title"],
-                "description": item["snippet"]["description"],
-                "url": f"https://www.youtube.com/watch?v={item['id']['videoId']}"
-            }
-            for item in yt_response["items"]
-        ]
+        # FALLBACK: If all YouTube searches failed
+        if not all_fetched_videos:
+            all_fetched_videos = [
+                {"subject": "General Study", "title": "How to Study Effectively", "url": "https://www.youtube.com/watch?v=p60rN9JEapg"},
+                {"subject": "General Study", "title": "Pomodoro Technique", "url": "https://www.youtube.com/watch?v=mNBmG24djoY"}
+            ]
 
-        # 4. Ask Gemini for JSON output
+        # --- DYNAMIC DISTRIBUTION LOGIC ---
+        if len(queries) > 1:
+            instruction = "Please return a STRICT JSON list containing EXACTLY ONE best video recommendation for EACH subject."
+        else:
+            instruction = "Please return a STRICT JSON list containing the TOP 3 best video recommendations for this subject."
+
+        # 3. Ask Gemini for JSON output
         prompt = f"""
-        The student is studying: {course}.
-        Their subjects are: {', '.join(subjects)}.
-        Here are some YouTube videos: {json.dumps(videos, indent=2)}.
+        The student needs help with these subjects: {', '.join(queries)}.
+        Here is a list of YouTube videos categorized by subject: 
+        {json.dumps(all_fetched_videos, indent=2)}
 
-        Please return the top 3 recommended videos as a STRICT JSON list.
-        Each entry should have:
+        {instruction}
+        Do not add Markdown (like ```json). Just the raw array.
+        Each entry MUST have:
         - "title"
         - "url"
-        - "reason"
+        - "reason" (Explain exactly why this video helps with that specific subject)
         """
 
         try:
             response = model.generate_content(prompt)
+            raw_text = response.text.strip()
+            cleaned = re.sub(r'```json|```', '', raw_text).strip()
+            recommendations = json.loads(cleaned)
         except Exception as e:
-            print(f"Gemini failed oo {e}")
-            response = rec_backup_response(prompt)
-        
-        recommendations = []
-        try:
-            recommendations = json.loads(response.text)
-        except Exception:
-            recommendations = videos[:3]  # fallback to top 3 raw videos
+            print(f"Primary Gemini failed: {e}")
+            try:
+                response = rec_backup_response(prompt)
+                raw_text = response.text.strip()
+                cleaned = re.sub(r'```json|```', '', raw_text).strip()
+                recommendations = json.loads(cleaned)
+            except Exception:
+                # FINAL FALLBACK: Manually format based on the rules
+                recommendations = []
+                if len(queries) > 1:
+                    # Pick 1 from each subject
+                    added_subjects = set()
+                    for v in all_fetched_videos:
+                        if v.get('subject') not in added_subjects:
+                            recommendations.append({
+                                "title": v["title"], 
+                                "url": v["url"], 
+                                "reason": f"Highly recommended resource for {v.get('subject', 'your studies')}."
+                            })
+                            added_subjects.add(v.get('subject'))
+                else:
+                    # Pick top 3 for the single subject
+                    recommendations = [
+                        {"title": v["title"], "url": v["url"], "reason": f"Highly recommended resource for {v.get('subject', 'your studies')}."} 
+                        for v in all_fetched_videos[:3]
+                    ]
 
-        # 5. Save recommendations to Firestore
+        # 4. Save recommendations to Firestore
         recs_ref = db.collection("users").document(uid).collection("recommendations")
         rec_doc = {
             "created_at": datetime.utcnow().isoformat(),
             "course": course,
-            "subjects": subjects,
+            "subjects": queries,
             "recommendations": recommendations
         }
         recs_ref.add(rec_doc)
@@ -641,11 +673,12 @@ def recommend_content():
         return jsonify({
             "ok": True,
             "recommendations": recommendations,
-            "raw_videos": videos
-        })
+            "raw_videos": all_fetched_videos
+        }), 200
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        print(f"Recommendations Route Error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @study_bp.route("/predict_performance", methods=["GET"])
 def predict_performance():
