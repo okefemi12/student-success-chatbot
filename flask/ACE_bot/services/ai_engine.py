@@ -6,11 +6,17 @@ import google.generativeai as genai
 from openai import OpenAI
 from key_manager import KeyManager
 from serpapi.google_search import GoogleSearch
+from pinecone import Pinecone  # <--- NEW: Pinecone import
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_PATH = os.path.join(BASE_DIR, "model", "student_prediction_model.pkl")
+
+
 # ML Model 
 try:
-    pipeline = joblib.load("model\student_prediction_model.pkl")
+    pipeline = joblib.load(MODEL_PATH)
 except Exception as e:
-    print(f"model not found{e}")
+    print(f"Warning: ML model not found at {MODEL_PATH}. Error: {e}")
     pipeline = None
 
 groq_client = OpenAI(
@@ -20,6 +26,7 @@ groq_client = OpenAI(
 #api keys
 serper_api_key = os.getenv("SERPER_API_KEY")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+
 #LLM configuration 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY_1"))
 model = genai.GenerativeModel(model_name="gemini-2.5-flash")
@@ -33,6 +40,15 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY_3"))
 model_cards= genai.GenerativeModel(model_name="gemini-2.5-flash")
 genai.configure(api_key=os.getenv("GEMINI_API_KEY_4"))
 reminder_model = genai.GenerativeModel("gemini-2.5-flash")
+
+# --- NEW: PINECONE CONFIGURATION ---
+try:
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    pinecone_index = pc.Index("ace-chat")
+except Exception as e:
+    print(f"Pinecone initialization failed: {e}")
+    pinecone_index = None
+# -----------------------------------
 
 FINAL_BACKUP = [
     os.environ.get("BACKUP_1"),             
@@ -118,6 +134,17 @@ def final_backup_response(prompt_or_content):
         print(f"All 6 Backup Keys failed: {e}")
         return "Error: Service temporarily unavailable. Please try again later."
 
-
-
-
+# --- NEW: EMBEDDING FUNCTION ---
+def get_embedding(text):
+    """Converts a string of text into a 768-dimensional vector using Gemini."""
+    try:
+        # We use text-embedding-004, Google's latest embedding model
+        result = genai.embed_content(
+            model="models/text-embedding-004",
+            content=text,
+            task_type="retrieval_document",
+        )
+        return result['embedding']
+    except Exception as e:
+        print(f"Embedding error: {e}")
+        return None

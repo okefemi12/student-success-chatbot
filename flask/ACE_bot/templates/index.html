@@ -29,6 +29,7 @@
     .message { margin-bottom:12px; padding:8px; border-radius:6px; }
     .message.user { text-align:right; background:#e3f2fd; color:#1565c0; margin-left:20%; }
     .message.assistant { text-align:left; background:#f1f8e9; color:#558b2f; margin-right:20%; }
+    .message.system { text-align:center; background:none; color:#999; font-size:12px; font-style:italic; margin: 8px 0; }
     .controls { display:flex; gap:8px; align-items:center; }
     .session-list { max-height:180px; overflow:auto; border:1px solid #eee; padding:8px; border-radius:6px; background:#fafafa; }
     .session-item { padding:8px; border-bottom:1px dashed #e0e0e0; display:flex; justify-content:space-between; align-items:center; gap:8px; }
@@ -187,9 +188,6 @@
       margin-bottom: 8px;
     }
   </style>
-  
-
-  </style>
 </head>
 <body>
   <header>
@@ -204,10 +202,8 @@
 
   <div class="grid">
 
-    <!-- LEFT COLUMN -->
     <div>
 
-      <!-- AUTH SECTION -->
       <section id="auth-section">
         <h2>🔐 Sign up / Login</h2>
         <div style="display:flex; gap:16px;">
@@ -251,7 +247,6 @@
         </div>
       </section>
 
-      <!-- PROFILE SECTION -->
       <section id="profile-section" class="hidden">
         <h2>👤 Your Profile</h2>
         <label>Name</label><input id="profile-name" />
@@ -271,7 +266,6 @@
         </div>
       </section>
 
-      <!-- STUDY SESSION -->
       <section id="study-section" class="hidden">
         <h2>📚 Study Session Tracker</h2>
         <div>
@@ -281,21 +275,18 @@
         <p id="study-status" class="status">No active session</p>
       </section>
 
-      <!-- PERFORMANCE PREDICTION -->
       <section id="prediction-section" class="hidden">
         <h2>🎯 Performance Prediction</h2>
         <button id="btn-predict-performance">Predict My Performance</button>
         <div id="prediction-result"></div>
       </section>
 
-      <!-- GAMIFICATION -->
       <section id="gamification-section" class="hidden">
         <h2>🏆 Your Progress</h2>
         <button id="btn-refresh-gamification">Refresh Stats</button>
         <div id="gamification-stats"></div>
       </section>
 
-      <!-- REMINDERS -->
       <section id="reminders-section" class="hidden">
         <h2>⏰ Study Reminders</h2>
         <label>Title</label><input id="reminder-title" />
@@ -313,17 +304,15 @@
         <div id="reminder-list"></div>
       </section>
 
-      <!-- RECOMMENDATIONS -->
       <section id="recommendations-section" class="hidden">
         <h2>📺 Content Recommendations</h2>
         <button id="btn-get-recommendations">Get Video Recommendations</button>
         <div id="recommendations-list"></div>
       </section>
-      <!-- LIBRARY SECTION -->
-    <section id="library-section" class="hidden">
+      
+      <section id="library-section" class="hidden">
       <h2>📚 My Library</h2>
       
-      <!-- Upload Form -->
       <div style="border:1px solid #e0e0e0; padding:12px; border-radius:6px; background:#f9f9f9; margin-bottom:16px;">
         <h3 style="margin:0 0 12px 0;">Upload Documents</h3>
         <form id="library-upload-form" enctype="multipart/form-data">
@@ -340,7 +329,6 @@
         </form>
       </div>
       
-      <!-- Library Items List -->
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <h3 style="margin:0;">Your Documents</h3>
         <div>
@@ -356,7 +344,6 @@
 
     </div>
 
-    <!-- RIGHT COLUMN -->
     <div>
       <section class="chat-box">
         <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -367,7 +354,6 @@
           </div>
         </div>
 
-        <!-- TABS -->
         <div class="tabs">
           <div class="tab active" data-tab="chat">Chat</div>
           <div class="tab" data-tab="sessions">Sessions</div>
@@ -376,7 +362,6 @@
           <div class="tab" data-tab="summaries">Summaries</div>
         </div>
 
-        <!-- CHAT TAB -->
         <div id="tab-chat" class="tab-content active">
           <div class="messages" id="messages-container" aria-live="polite"></div>
 
@@ -385,15 +370,20 @@
             <button id="btn-send">Send</button>
           </div>
 
-          <!-- Audio Recording -->
           <div style="display:flex; gap:8px; margin-top:10px;">
             <button id="btn-start-recording" class="small">🎤 Record</button>
             <button id="btn-stop-recording" class="small danger" disabled>⏹ Stop</button>
             <div id="recording-status" class="status" style="flex:1;"></div>
           </div>
 
-          <!-- File Uploads -->
           <div style="margin-top:10px;">
+            
+            <form id="chat-rag-form" enctype="multipart/form-data" style="margin-bottom:12px; padding:8px; border:1px solid #007cba; border-radius:6px; background:#e3f2fd;">
+              <label style="margin-top:0; color:#005a8c; font-weight:bold;">📎 Attach Document to Chat Session</label>
+              <input type="file" name="file" accept=".pdf,.docx,.pptx,.xlsx" required />
+              <button type="submit" class="small" style="margin-top:6px; width:100%;">Upload & Vectorize</button>
+            </form>
+
             <form id="pdf-summary-form" enctype="multipart/form-data" style="margin-bottom:8px;">
               <input type="file" name="file" accept=".pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg" />
               <button type="submit" class="small">📄 Doc Summary</button>
@@ -410,7 +400,6 @@
             </form>
           </div>
 
-          <!-- Text Input Forms -->
           <form id="quiz-form" style="margin-top:10px;">
             <textarea id="quiz-input" placeholder="Paste text to generate quiz..." rows="2"></textarea>
             <button type="submit" class="small">Generate Quiz</button>
@@ -424,7 +413,6 @@
           <div class="status" id="chat-status"></div>
         </div>
 
-        <!-- SESSIONS TAB -->
         <div id="tab-sessions" class="tab-content">
           <h3>Chat Sessions</h3>
           <div style="margin-bottom:12px;">
@@ -434,7 +422,6 @@
           <div class="session-list" id="local-sessions"></div>
         </div>
 
-        <!-- FLASHCARDS TAB -->
         <div id="tab-flashcards" class="tab-content">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
             <h3 style="margin:0">🃏 Flashcards</h3>
@@ -445,7 +432,6 @@
           </div>
         </div>
 
-        <!-- QUIZ TAB -->
         <div id="tab-quiz" class="tab-content">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
             <h3 style="margin:0">📝 Quizzes</h3>
@@ -456,7 +442,6 @@
           </div>
         </div>
 
-        <!-- SUMMARIES TAB -->
         <div id="tab-summaries" class="tab-content">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
             <h3 style="margin:0">📄 Summaries</h3>
@@ -592,7 +577,7 @@
       "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
     }[s]));
   }
-  // ✅ ADD THESE TWO FUNCTIONS HERE - Right after escapeHtml
+  
   function parseAndFormatMessage(text) {
     // Convert **bold** to <strong>
     text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
@@ -632,7 +617,6 @@
           currentIndex++;
         } else {
           clearInterval(interval);
-          // Replace with properly formatted HTML
           element.innerHTML = html;
           resolve();
         }
@@ -1028,7 +1012,6 @@ async function loadReminders() {
     $("chat-status").textContent = "";
   });
 
-  // Load library documents
 // Load library documents
   async function loadLibrary() {
     const uid = auth.currentUser ? auth.currentUser.uid : "";
@@ -1100,7 +1083,7 @@ async function loadReminders() {
       listDiv.appendChild(itemDiv);
     });
     
-    // Delete and update handlers (same as before)
+    // Delete and update handlers
     listDiv.querySelectorAll("button[data-delete-library]").forEach(btn => {
       btn.onclick = async () => {
         const docId = btn.getAttribute("data-delete-library");
@@ -1221,7 +1204,6 @@ async function loadReminders() {
   }
 
   // Show modal for updating library item
-// Show modal for updating library item
   function showUpdateLibraryModal(docId, item) {
     const newTitle = prompt("Enter new title (leave empty to keep current):", item.title);
     if (newTitle === null) return; // User cancelled
@@ -1303,12 +1285,13 @@ async function loadReminders() {
       
       input.click();
     } else if (newTitle) {
-      // Just update title (quick operation, no progress needed)
+      // Just update title
       updateLibraryTitle(docId, newTitle);
     }
   }
+
   // Load Summaries
-async function loadSummaries() {
+  async function loadSummaries() {
   const res = await api("/get_summaries");
   if (res.error) { logBackend(res); return; }
   
@@ -1439,8 +1422,6 @@ $("btn-add-reminder").addEventListener("click", async () => {
 });
 
 $("btn-refresh-reminders").addEventListener("click", loadReminders);
-
-
 
 
   // Recommendations
@@ -1626,8 +1607,13 @@ $("btn-refresh-reminders").addEventListener("click", loadReminders);
     container.innerHTML = "";
     messages.forEach(m => {
       const div = document.createElement("div");
-      div.className = "message " + (m.role === "user" ? "user" : "assistant");
-      div.innerHTML = `<div>${escapeHtml(m.content)}</div>`;
+      // Handle the "system" role we just added in the backend!
+      let displayRole = m.role;
+      if (m.role !== "user" && m.role !== "system") {
+         displayRole = "assistant";
+      }
+      div.className = "message " + displayRole;
+      div.innerHTML = `<div>${m.role === 'system' ? '⚙️ ' : ''}${escapeHtml(m.content)}</div>`;
       container.appendChild(div);
     });
     container.scrollTop = container.scrollHeight;
@@ -1830,47 +1816,6 @@ $("btn-refresh-reminders").addEventListener("click", loadReminders);
     generateAudio();
   }
 
-  // New function to fetch audio asynchronously
-  async function fetchAudioForMessage(text, buttonElement) {
-    try {
-      const audioRes = await api(`/chat/${currentSessionId}/audio`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text })
-      });
-
-      if (audioRes.error) {
-        console.error("Audio generation failed:", audioRes.error);
-        buttonElement.textContent = "❌ Audio unavailable";
-        buttonElement.disabled = true;
-        return;
-      }
-
-      if (audioRes.audio) {
-        // Audio ready - update button
-        buttonElement.textContent = "🔊 Play Audio";
-        buttonElement.disabled = false;
-        
-        const mime = audioRes.mime_type || "audio/wav";
-        buttonElement.onclick = () => {
-          const audio = new Audio(`data:${mime};base64,${audioRes.audio}`);
-          audio.play().catch(err => {
-            console.warn("Playback failed:", err);
-            alert("Audio playback failed");
-          });
-        };
-      } else {
-        buttonElement.textContent = "❌ No audio generated";
-        buttonElement.disabled = true;
-      }
-    } catch (err) {
-      console.error("Audio fetch error:", err);
-      buttonElement.textContent = "❌ Audio failed";
-      buttonElement.disabled = true;
-    }
-  }
-
-
   $("btn-send").addEventListener("click", async () => {
     const text = $("message-input").value.trim();
     if (!text) return;
@@ -1883,6 +1828,48 @@ $("btn-refresh-reminders").addEventListener("click", loadReminders);
       e.preventDefault();
       $("btn-send").click();
     }
+  });
+
+// RAG CHAT DOCUMENT UPLOAD
+  $("chat-rag-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!currentSessionId) {
+      alert("Please create or load a Chat Session first!");
+      return;
+    }
+    
+    const form = e.target;
+    const fd = new FormData(form);
+    $("chat-status").textContent = "Uploading & Vectorizing document... ⏳";
+    
+    try {
+      const res = await fetch(`/chat/${currentSessionId}/upload`, { 
+        method:"POST", 
+        body: fd, 
+        headers: { "Authorization": "Bearer " + (localStorage.getItem("idToken")||"") }
+      });
+      const jr = await res.json();
+      logBackend(jr);
+      
+      if (jr.error) {
+        alert("Upload error: " + jr.error);
+      } else {
+        // Add visual confirmation to chat
+        const cont = $("messages-container");
+        const sysDiv = document.createElement("div");
+        sysDiv.className = "message system";
+        sysDiv.innerHTML = `<div>⚙️ ${escapeHtml(jr.message)}</div>`;
+        cont.appendChild(sysDiv);
+        cont.scrollTop = cont.scrollHeight;
+        
+        alert("✅ Document saved to chat memory! You can now ask questions about it.");
+      }
+    } catch (err) { 
+      alert("Upload failed: " + err.message); 
+    }
+    
+    $("chat-status").textContent = "";
+    form.reset();
   });
 
 // PDF Summary
@@ -1905,7 +1892,7 @@ $("btn-refresh-reminders").addEventListener("click", loadReminders);
         alert("PDF error: " + jr.error);
       } else {
         alert("✅ Summary generated!");
-        loadSummaries(); // ✅ FIX: Load summaries instead of adding to chat
+        loadSummaries(); 
       }
     } catch (err) { 
       alert("Upload failed: " + err.message); 
@@ -2031,7 +2018,7 @@ $("btn-refresh-reminders").addEventListener("click", loadReminders);
     $("chat-status").textContent = "";
   });
 
- 
+  
 // Load Flashcards
   async function loadFlashcards() {
     const res = await api("/get_flashcards");

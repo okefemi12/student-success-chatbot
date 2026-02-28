@@ -113,3 +113,16 @@ def extract_text_from_excel(file_url):
     except Exception as e:
         print(f"Excel extraction error: {e}")
         return ""
+    
+
+def extract_text_from_txt(file_url):
+    try:
+        response = requests.get(file_url, timeout=30)
+        response.raise_for_status()
+        
+        # Simply return the decoded text from the response
+        return response.text.strip()
+        
+    except Exception as e:
+        print(f"Text File extraction error: {e}")
+        return ""

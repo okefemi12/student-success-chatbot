@@ -379,7 +379,6 @@ def delete_reminder(reminder_id):
 @study_bp.route("/gamification/<uid>", methods=["GET", "POST"])
 def gamification(uid):
     try:
-
         decoded = verify_token_from_request()
         if decoded["uid"] != uid:
             return jsonify({"error": "Unauthorized"}), 403
@@ -387,11 +386,22 @@ def gamification(uid):
         user_ref = db.collection("users").document(uid)
         gamification_ref = user_ref.collection("meta").document("gamification")
 
-        # Frontend sends badge or level updates
+        # Frontend sends badge, level, OR streaks updates
         if request.method == "POST":
             data = request.get_json() or {}
             add_badge = data.get("badge")
             new_level = data.get("level")
+            
+            # --- FIX 6: Handle Streak Updates ---
+            streak_updates = {}
+            if "streak" in data:
+                streak_updates["streak"] = data["streak"]
+            if "longest_streak" in data:
+                streak_updates["longest_streak"] = data["longest_streak"]
+            if streak_updates:
+                # Update the main user profile where streaks are kept
+                user_ref.update(streak_updates)
+            # ------------------------------------
 
             # Fetch current gamification data
             doc = gamification_ref.get()
@@ -683,9 +693,12 @@ def recommend_content():
 @study_bp.route("/predict_performance", methods=["GET"])
 def predict_performance():
     try:
+        if pipeline is None:
+            return jsonify({"error": "Prediction model is currently unavailable on the server."}), 503
         # Verify user authentication
         decoded = verify_token_from_request()
         uid = decoded["uid"]
+
 
         # 1️Fetch user data
         user_ref = db.collection("users").document(uid)

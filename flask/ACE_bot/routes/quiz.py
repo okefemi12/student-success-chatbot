@@ -9,7 +9,7 @@ from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
 from extensions import db
 from utils.helpers import verify_token_from_request, update_streak
-from services.doc_processor import extract_text_from_pdf, extract_text_from_docx, extract_text_from_pptx, extract_text_from_excel, get_pdf_as_images
+from services.doc_processor import extract_text_from_pdf, extract_text_from_docx, extract_text_from_pptx, extract_text_from_excel, get_pdf_as_images, extract_text_from_txt
 from services.ai_engine import model_cards, model_pdf, final_backup_response
 import cloudinary.uploader
 
@@ -135,6 +135,8 @@ def media_quiz():
                 response = requests.get(file_url)
                 image_parts = [Image.open(BytesIO(response.content))]
                 extracted_text = "IMAGE_MODE" 
+            elif filename.endswith(".txt"):
+                extracted_text = extract_text_from_txt(file_url)
             else:
                 return jsonify({"error": "Unsupported file type"}), 400
         except Exception as e:
@@ -310,7 +312,9 @@ def media_flashcards():
             elif filename.endswith((".png", ".jpg", ".jpeg", ".webp")):
                 response = requests.get(file_url)
                 image_parts = [Image.open(BytesIO(response.content))]
-                extracted_text = "IMAGE_MODE" 
+                extracted_text = "IMAGE_MODE"
+            elif filename.endswith((".txt")):
+                extracted_text = extract_text_from_txt(file_url)
             else:
                 return jsonify({"error": "Unsupported file type"}), 400
                 
@@ -376,6 +380,28 @@ def media_flashcards():
     except Exception as e:
         print(f"Media Route Error: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+#Added flashcard progress 
+@quiz_bp.route('/flashcards/<flashcard_id>/progress', methods=['POST'])
+def save_flashcard_progress(flashcard_id):
+    """Saves per-card study progress (e.g. correct, attempts)"""
+    try:
+        decoded = verify_token_from_request()
+        uid = decoded["uid"]
+        data = request.get_json() or {}
+        
+        # Save the stats to a subcollection or update the doc
+        progress_ref = db.collection("users").document(uid).collection("flashcards").document(flashcard_id)
+        progress_ref.set({
+            "progress_stats": data,
+            "last_studied": firestore.SERVER_TIMESTAMP
+        }, merge=True)
+
+        return jsonify({"ok": True, "message": "Progress saved"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 
 @quiz_bp.route('/chat_flashcards', methods=['POST'])
