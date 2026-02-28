@@ -6,7 +6,6 @@ import google.generativeai as genai
 from openai import OpenAI
 from key_manager import KeyManager
 from serpapi.google_search import GoogleSearch
-from pinecone import Pinecone  # <--- NEW: Pinecone import
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_PATH = os.path.join(BASE_DIR, "model", "student_prediction_model.pkl")
@@ -41,13 +40,6 @@ model_cards= genai.GenerativeModel(model_name="gemini-2.5-flash")
 genai.configure(api_key=os.getenv("GEMINI_API_KEY_4"))
 reminder_model = genai.GenerativeModel("gemini-2.5-flash")
 
-# --- NEW: PINECONE CONFIGURATION ---
-try:
-    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-    pinecone_index = pc.Index("ace-chat")
-except Exception as e:
-    print(f"Pinecone initialization failed: {e}")
-    pinecone_index = None
 # -----------------------------------
 
 FINAL_BACKUP = [
