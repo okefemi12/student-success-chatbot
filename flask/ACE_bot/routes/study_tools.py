@@ -8,8 +8,10 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify
 from firebase_admin import firestore
 from extensions import db
+from io import BytesIO
+from PIL import Image
 from utils.helpers import verify_token_from_request, clean_response, update_streak, safe_clean_dict
-from services.doc_processor import extract_text_from_pdf, extract_text_from_docx, extract_text_from_pptx, extract_text_from_excel
+from services.doc_processor import extract_text_from_pdf, extract_text_from_docx, extract_text_from_pptx, extract_text_from_excel,extract_text_from_txt
 from services.ai_engine import model, model_pdf, reminder_model, generate_backup_response, final_backup_response, rec_backup_response, pipeline, YOUTUBE_API_KEY
 import requests
 from youtube_search import YoutubeSearch
@@ -38,6 +40,9 @@ def media_summary():
 
         file = request.files['file']
         filename = file.filename.lower()
+        
+        # --- FIX 4: Accept Title from frontend ---
+        title = request.form.get("title", "").strip()
 
         # Determine Mime Type (Crucial for passing images to Gemini)
         mime_type, _ = mimetypes.guess_type(filename)
@@ -50,7 +55,11 @@ def media_summary():
             resource_type="auto"
         )
         file_url = upload_result["secure_url"]
-        file_name = upload_result["original_filename"]
+        file_name = upload_result.get("original_filename", "document")
+        
+        # Fallback to filename if no title is provided
+        if not title:
+            title = file_name 
 
         # --- 3. Rewind File (Crucial!) ---
         file.seek(0)
@@ -58,27 +67,35 @@ def media_summary():
         # --- 4. Extract Text OR Flag for Visual Mode ---
         extracted_text = ""
         is_visual_file = False 
-
-        if filename.endswith(".pdf"):
-            extracted_text += extract_text_from_pdf(file_url)
-            # If text extraction fails, treat as a scanned PDF (Visual)
-            if not extracted_text.strip():
+        
+        # --- FIX 2: Check for exceptions during extraction to catch errors immediately ---
+        try:
+            if filename.endswith(".pdf"):
+                extracted_text += extract_text_from_pdf(file_url)
+                if not extracted_text.strip():
+                    is_visual_file = True
+            
+            elif filename.endswith(".docx"):
+                extracted_text += extract_text_from_docx(file_url)
+            elif filename.endswith(".pptx"):
+                extracted_text += extract_text_from_pptx(file_url)
+            elif filename.endswith((".xls", ".xlsx")):
+                extracted_text += extract_text_from_excel(file_url)
+            elif filename.endswith(".txt"):
+                extracted_text += extract_text_from_txt(file_url)
+            
+            # Handle Standard Images
+            elif filename.endswith((".jpg", ".jpeg", ".png", ".webp", ".heic")):
                 is_visual_file = True
-        
-        elif filename.endswith(".docx"):
-            extracted_text += extract_text_from_docx(file_url)
-        elif filename.endswith(".pptx"):
-            extracted_text += extract_text_from_pptx(file_url)
-        elif filename.endswith((".xls", ".xlsx")):
-            extracted_text += extract_text_from_excel(file_url)
-        
-        # Handle Standard Images
-        elif filename.endswith((".jpg", ".jpeg", ".png", ".webp", ".heic")):
-            is_visual_file = True
-        
-        else:
-            return jsonify({"error": "Unsupported file type"}), 400
+            else:
+                return jsonify({"error": "Unsupported file type"}), 400
+        except Exception as e:
+            print(f"File extraction error: {e}")
+            return jsonify({"error": "Failed to read the file content. The file might be corrupted."}), 400
 
+        # Check if text extraction failed (and it's not an image)
+        if not extracted_text.strip() and not is_visual_file:
+            return jsonify({"error": "No readable text found in the document."}), 400
 
         # --- 5. Generate Summary (With 3-Layer Backup) ---
         final_answer = ""
@@ -86,7 +103,7 @@ def media_summary():
         # === METHOD A: TEXT-BASED SUMMARY ===
         if extracted_text.strip() and not is_visual_file:
             # 1. Chunking
-            def chunk_text(text, max_words=2000): # Increased chunk size slightly
+            def chunk_text(text, max_words=2000):
                 words = text.split()
                 return [' '.join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
 
@@ -100,7 +117,7 @@ def media_summary():
                     response = model_pdf.generate_content(chunk_prompt)
                     summaries.append(response.text.strip())
                 except Exception as e:
-                    summaries.append("") # Skip bad chunks or handle differently
+                    summaries.append("") 
 
             # 3. Final Compilation
             full_summary_prompt = (
@@ -112,7 +129,6 @@ def media_summary():
                 # LAYER 1: Primary Model
                 final_response = model.generate_content(full_summary_prompt)
                 raw_answer = final_response.text.strip()
-            
             except Exception as e:
                 print(f"Primary Text Summary Failed: {e}")
                 try:
@@ -132,7 +148,7 @@ def media_summary():
                 file_data = file.read()
                 visual_prompt = "You are Felix. Analyze this image/document. Provide a detailed academic summary."
                 
-                # Input for Gemini (List of [Prompt, ImageDict])
+                # Input for Gemini
                 gemini_input = [visual_prompt, {"mime_type": mime_type, "data": file_data}]
 
                 # LAYER 1: Primary Model
@@ -141,34 +157,45 @@ def media_summary():
 
             except Exception as e:
                 print(f"Primary Visual Summary Failed: {e}")
-                # Prepare input again (in case it was modified)
                 file.seek(0)
                 file_data = file.read()
                 gemini_input = [visual_prompt, {"mime_type": mime_type, "data": file_data}]
 
+                # --- FIX 1: Prevent sending bytes to Groq/Cohere text-only backup models ---
+                # Since generate_backup_response uses text-only models, we skip straight to final_backup_response 
+                # because your KeyManager rotates through Gemini keys which CAN handle visual data.
                 try:
-                    # LAYER 2: First Backup
-                    raw_answer = generate_backup_response(gemini_input)
-                except Exception as e2:
-                    print(f"First Visual Backup Failed: {e2}")
-                    # LAYER 3: Final 6-Key Backup (Last Resort)
-                    raw_answer = final_backup_response(gemini_input)
+                    print("Skipping text-only backup, using Gemini visual backup keys...")
+                    raw_answer = final_backup_response(gemini_input).strip()
+                except Exception as e3:
+                    print(f"Visual Backup Failed: {e3}")
+                    raw_answer = ""
             
-            final_answer = clean_response(raw_answer)
+            final_answer = raw_answer
 
         else:
             return jsonify({"error": "Could not extract text from this file."}), 400
 
+        # --- FIX 5: Validate AI output before saving to Database ---
+        # Prevent saving "All model attempts failed" to the database
+        if not final_answer or "All model attempts failed" in final_answer or "Error:" in final_answer:
+            return jsonify({"error": "AI could not generate a valid summary from this file."}), 500
 
         # --- 6. Save to Firestore ---
         db.collection("users").document(uid).collection("summaries").add({
+            "title": title, # FIX 4: Save the title
             "summary": final_answer,
             "created_at": datetime.utcnow().isoformat(),
             "source_file": file_name,
             "file_url": file_url
         })
 
-        return jsonify({"response": final_answer, "file_url": file_url}), 200
+        # --- FIX 3: Return standard structure (summary instead of response) ---
+        return jsonify({
+            "summary": final_answer, 
+            "title": title,
+            "file_url": file_url
+        }), 200
 
     except Exception as e:
         print("Error in /media_summary:", str(e))
@@ -693,14 +720,15 @@ def recommend_content():
 @study_bp.route("/predict_performance", methods=["GET"])
 def predict_performance():
     try:
+        from services.ai_engine import pipeline
         if pipeline is None:
             return jsonify({"error": "Prediction model is currently unavailable on the server."}), 503
+
         # Verify user authentication
         decoded = verify_token_from_request()
         uid = decoded["uid"]
 
-
-        # 1️Fetch user data
+        # 1. Fetch user data
         user_ref = db.collection("users").document(uid)
         user_doc = user_ref.get()
         if not user_doc.exists:
@@ -708,13 +736,12 @@ def predict_performance():
 
         user_data = user_doc.to_dict()
 
-        # Compute age from date_of_birth (expecting 'YYYY-MM-DD' or ISO format)
+        # Compute age from date_of_birth
         default_age = 17
-        dob_str = user_data.get("date_of_birth")  # your field
+        dob_str = user_data.get("date_of_birth") 
         age = default_age
         if dob_str:
             try:
-                # handles "YYYY-MM-DD" and ISO datetime strings
                 dob = datetime.fromisoformat(dob_str).date()
             except Exception:
                 try:
@@ -724,24 +751,37 @@ def predict_performance():
             if dob:
                 today = datetime.utcnow().date()
                 age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-                if age < 0:
-                    # safeguard if DOB is in future by mistake
-                    age = 0
+                if age < 0: age = 0
 
-        # Prepare ML model input
+        # --- THE DATA ADAPTER HACK ---
+        # 1. Extract Real App Telemetry (calculated by /log_activity and gamification)
+        raw_study_hours = user_data.get("study_hours_per_week", 0)
+        raw_attendance = user_data.get("attendance_percentage", 0)
+        raw_assignments = user_data.get("assignment_completed", 0) 
+        streak = user_data.get("streak", 0)
+        
+        # 2. Map & Boost
+        # Boost "attendance" slightly if they have a good login streak
+        boosted_attendance = min(100, raw_attendance + (streak * 2))
+
+        # Hardcode sleep to 8 hours so the ML model doesn't penalize them
+        fake_sleep_hours = 8.0 
+
         gender_val = user_data.get("gender", "")
         gender_val = gender_val.lower() if isinstance(gender_val, str) else ""
+
+        # 3. Format exactly as the .pkl file expects
         ml_input = {
-            "study_hours_per_week": round(user_data.get("study_hours_per_week", 0) / 40, 3),
-            "sleep_hours_per_day": round(user_data.get("sleep_hours_per_day", 8) / 10, 3),
-            "attendance_percentage": round(user_data.get("attendance_percentage", 0) / 100, 3),
-            "assignments_completed": round(user_data.get("assignment_completed", 0), 3),
-            "participation_level": user_data.get("participation_level", 0),
+            "study_hours_per_week": round(raw_study_hours / 40, 3),
+            "sleep_hours_per_day": round(fake_sleep_hours / 10, 3), # Locked at 0.8
+            "attendance_percentage": round(boosted_attendance / 100, 3),
+            "assignments_completed": round(raw_assignments, 3),
+            "participation_level": int(user_data.get("participation_level", 0)),
             "Age": int(age),
             "Gender": 1 if gender_val == "male" else 0,
-            "StudyTimeWeekly": round(user_data.get("study_hours_per_week", 0), 2),
-            "Absences": user_data.get("Absences", 0),
-            "Tutoring": user_data.get("Tutoring", 0)
+            "StudyTimeWeekly": round(raw_study_hours, 2),
+            "Absences": int(user_data.get("Absences", 0)),
+            "Tutoring": int(user_data.get("Tutoring", 0))
         }
 
         df = pd.DataFrame([ml_input])
@@ -752,38 +792,29 @@ def predict_performance():
         confidence = float(proba[1] * 100)
         fail_confidence = float((1 - proba[1]) * 100)
 
-        # Generate message
+        # Generate App-Specific Feedback
         if int(prediction[0]) == 1:
-            message = f"Our model predicts you'll PASS your next exam 🎯 (Confidence: {confidence:.2f}%). Keep it up!"
+            message = f"Our model predicts you'll PASS your next exam 🎯 (Confidence: {confidence:.2f}%). Keep up your current streaks and study volume!"
         else:
-            message = f"The model predicts you might fail your next exam 📊 (Confidence: {fail_confidence:.2f}%). Let's improve your learning habits."
+            message = f"The model predicts you might struggle on your next exam 📊 (Confidence: {fail_confidence:.2f}%). Let's improve your learning habits."
 
             reasons = []
-            if ml_input["study_hours_per_week"] < 0.4:
-                reasons.append("increase your weekly study hours")
+            if ml_input["study_hours_per_week"] < 0.4: # Less than 16 hours a week
+                reasons.append("log more focused study hours using the session tracker")
             if ml_input["attendance_percentage"] < 0.7:
-                reasons.append("improve your class attendance")
+                reasons.append("maintain your daily login streak and study sessions")
             if ml_input["assignments_completed"] < 0.5:
-                reasons.append("complete more assignments/quizzes on time")
-            if ml_input["sleep_hours_per_day"] < 0.5:
-                reasons.append("maintain a healthier sleep schedule")
+                reasons.append("take more AI quizzes to prove your knowledge retention")
 
             if reasons:
                 message += " To improve, try to " + ", ".join(reasons) + "."
 
-
         def to_native(value):
-            if isinstance(value, (np.floating, np.float32, np.float64)):
-                return float(value)
-            elif isinstance(value, (np.integer, np.int32, np.int64)):
-                return int(value)
-            elif isinstance(value, dict):
-                return {k: to_native(v) for k, v in value.items()}
-            elif isinstance(value, list):
-                return [to_native(v) for v in value]
-            else:
-                return value
-
+            if isinstance(value, (np.floating, np.float32, np.float64)): return float(value)
+            elif isinstance(value, (np.integer, np.int32, np.int64)): return int(value)
+            elif isinstance(value, dict): return {k: to_native(v) for k, v in value.items()}
+            elif isinstance(value, list): return [to_native(v) for v in value]
+            else: return value
 
         prediction_data = {
             "timestamp": datetime.utcnow().isoformat(),
@@ -804,4 +835,5 @@ def predict_performance():
         }), 200
 
     except Exception as e:
+        print(f"Prediction error: {e}")
         return jsonify({"error": str(e)}), 500
