@@ -102,29 +102,50 @@ def media_summary():
 
         # === METHOD A: TEXT-BASED SUMMARY ===
         if extracted_text.strip() and not is_visual_file:
-            # 1. Chunking
-            def chunk_text(text, max_words=2000):
-                words = text.split()
-                return [' '.join(words[i:i + max_words]) for i in range(0, len(words), max_words)]
-
-            chunks = chunk_text(extracted_text)
-            summaries = []
+            words = extracted_text.split()
             
-            # 2. Summarize Chunks (Primary Model Only)
-            for chunk in chunks:
-                chunk_prompt = f"Summarize this section clearly:\n\n{chunk.strip()}"
-                try:
-                    response = model_pdf.generate_content(chunk_prompt)
-                    summaries.append(response.text.strip())
-                except Exception as e:
-                    summaries.append("") 
+            # --- FIX: Skip chunking for normal-sized documents ---
+            if len(words) < 2500:
+                full_summary_prompt = f"Create a detailed, highly structured academic summary from the following notes:\n\n{extracted_text.strip()}"
+            
+            # --- Chunking for massive documents ---
+            else:
+                def chunk_text(text, max_words=2000):
+                    words_list = text.split()
+                    return [' '.join(words_list[i:i + max_words]) for i in range(0, len(words_list), max_words)]
 
-            # 3. Final Compilation
-            full_summary_prompt = (
-                "Create a detailed academic summary from these notes:\n\n" +
-                "\n\n".join(summaries)
-            )
+                chunks = chunk_text(extracted_text)
+                summaries = []
+                
+                # Summarize Chunks (With Backup Protection)
+                for i, chunk in enumerate(chunks):
+                    chunk_prompt = f"Summarize part {i+1} of this document clearly:\n\n{chunk.strip()}"
+                    try:
+                        response = model_pdf.generate_content(chunk_prompt)
+                        summaries.append(response.text.strip())
+                    except Exception as e:
+                        print(f"Chunk {i+1} primary model failed: {e}")
+                        try:
+                            # Rescue the chunk using the backup model!
+                            backup_resp = generate_backup_response(chunk_prompt)
+                            summaries.append(backup_resp)
+                        except Exception as e2:
+                            print(f"Chunk {i+1} backup failed: {e2}")
 
+                # Clean out any failed empty strings
+                summaries = [s for s in summaries if s.strip()]
+                
+                # Prevent AI from receiving blank prompts
+                if not summaries:
+                    return jsonify({"error": "AI models failed to process the document text. It may be too complex or flagged by safety filters."}), 500
+
+                # Final Compilation
+                full_summary_prompt = (
+                    "Create a detailed, highly structured academic summary by combining these section summaries:\n\n" +
+                    "\n\n".join(summaries)
+                )
+
+            # --- Generate Final Answer ---
             try:
                 # LAYER 1: Primary Model
                 final_response = model.generate_content(full_summary_prompt)
