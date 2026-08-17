@@ -1,3 +1,4 @@
+# 🧠 Student Success Chatbot (ACE Bot)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-Backend-green)](https://flask.palletsprojects.com/)
 [![Docker](https://img.shields.io/badge/Docker-Enabled-blue)](https://www.docker.com/)
@@ -5,18 +6,15 @@
 [![LangChain](https://img.shields.io/badge/LangChain-RAG-blueviolet)](https://langchain.com/)
 [![Pinecone](https://img.shields.io/badge/Pinecone-Vector%20DB-lightgrey)](https://www.pinecone.io/)
 
+<br>
 
-<img width="1918" height="969" alt="image" src="https://github.com/user-attachments/assets/890c4607-d289-4357-9938-19e73d6db2a3" />
-
-
-
+<p align="center">
+  <img width="1918" height="969" alt="ACE Bot Interface" src="https://github.com/user-attachments/assets/890c4607-d289-4357-9938-19e73d6db2a3" />
+</p>
 
 https://github.com/user-attachments/assets/262b287d-a3be-437d-b162-ec59ce4c4888
 
-
-
-
-# 🧠 Student Success Chatbot (ACE Bot)
+<br>
 
 A comprehensive **AI-powered academic assistant** designed to help students plan, track, and improve their academic performance.
 
