@@ -3,6 +3,7 @@ import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 from dotenv import load_dotenv
+from pinecone import Pinecone
 
 load_dotenv()
 
@@ -17,6 +18,8 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+pinecone_index = pc.Index(os.getenv("PINECONE_INDEX_NAME", "ace-bot-index"))
 
 
 
