@@ -4,6 +4,14 @@
 [![XGBoost](https://img.shields.io/badge/XGBoost-Machine%20Learning-orange)](https://xgboost.ai/)
 [![LangChain](https://img.shields.io/badge/LangChain-RAG-blueviolet)](https://langchain.com/)
 [![Pinecone](https://img.shields.io/badge/Pinecone-Vector%20DB-lightgrey)](https://www.pinecone.io/)
+
+
+<img width="716" height="676" alt="image" src="https://github.com/user-attachments/assets/1bbdc729-42d2-4827-9f35-86d47bbbd43b" />
+<img width="653" height="594" alt="image" src="https://github.com/user-attachments/assets/565495a9-ea26-4341-8859-6718841dffa5" />
+<img width="674" height="695" alt="image" src="https://github.com/user-attachments/assets/3503e6ad-ffda-48d3-bd5b-962e7f64b728" />
+
+
+
 # 🧠 Student Success Chatbot (ACE Bot)
 
 A comprehensive **AI-powered academic assistant** designed to help students plan, track, and improve their academic performance.
