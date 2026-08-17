@@ -1,3 +1,4 @@
+import os
 import uuid
 import cloudinary.uploader
 from flask import Blueprint, request, jsonify
@@ -7,9 +8,13 @@ from utils.helpers import verify_token_from_request, clean_response, update_stre
 from services.ai_engine import model, generate_backup_response, groq_client, search_web
 from services.audio_service import generate_audio_with_retry
 from services.doc_processor import extract_text_from_pdf, extract_text_from_docx, extract_text_from_pptx, extract_text_from_excel,extract_text_from_txt
+
 from langchain.memory.buffer import ConversationBufferMemory
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain.schema import HumanMessage, AIMessage
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_pinecone import PineconeVectorStore
 
 chat_bp = Blueprint('chat', __name__)
 
@@ -63,19 +68,34 @@ def upload_chat_document(session_id):
         if not extracted_text.strip():
             return jsonify({"error": "No readable text found in the document."}), 400
 
-        # Limit text to 200,000 characters to fit safely inside a Firestore document
-        extracted_text = extracted_text[:200000]
+        # 3. LangChain RAG Pipeline: Chunk, Embed, and Store in Vector DB
+        try:
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000, 
+                chunk_overlap=200,
+                separators=["\n\n", "\n", " ", ""]
+            )
+            chunks = text_splitter.split_text(extracted_text)
 
-        # 3. Save FULL TEXT to Firestore (No Pinecone needed)
+            # Generate embeddings using Google's text-embedding-004
+            embeddings = GoogleGenerativeAIEmbeddings(
+                model="models/text-embedding-004", 
+                google_api_key=os.getenv("GEMINI_API_KEY_1")
+            )
+
+            # Upsert into Pinecone under the specific session_id namespace
+            PineconeVectorStore.from_texts(
+                texts=chunks,
+                embedding=embeddings,
+                index_name=os.getenv("PINECONE_INDEX_NAME", "ace-bot-index"),
+                namespace=session_id
+            )
+        except Exception as e:
+            print(f"Vector DB Pipeline Error: {e}")
+            return jsonify({"error": "Failed to process document for vector storage."}), 500
+
         session_ref = db.collection("users").document(uid).collection("chat_sessions").document(session_id)
         
-        session_ref.collection("context").add({
-            "filename": file_name,
-            "file_url": file_url,
-            "text": extracted_text,
-            "timestamp": firestore.SERVER_TIMESTAMP
-        })
-
         # 4. Save a system message to Firestore so it shows up in the chat UI
         session_ref.collection("messages").add({
             "role": "system", 
@@ -84,7 +104,7 @@ def upload_chat_document(session_id):
             "timestamp": firestore.SERVER_TIMESTAMP
         })
 
-        return jsonify({"ok": True, "message": "Document text saved to chat memory!", "file_url": file_url}), 200
+        return jsonify({"ok": True, "message": "Document text saved to vector database!", "file_url": file_url}), 200
 
     except Exception as e:
         print(f"Chat upload error: {e}")
@@ -166,23 +186,37 @@ def chat(session_id):
                     f"- Degree: {profile_data.get('degree', 'N/A')}\n"
                 )
 
-        # ---> FETCH FULL DOCUMENT CONTEXT FROM FIRESTORE <---
+        # ---> RETRIEVE RELEVANT CONTEXT FROM VECTOR DATABASE (RAG) <---
         docs_context = ""
-        context_refs = session_ref.collection("context").stream()
-        for doc in context_refs:
-            doc_data = doc.to_dict()
-            docs_context += f"\n--- Uploaded Document: {doc_data.get('filename')} ---\n"
-            docs_context += f"{doc_data.get('text')}\n"
+        try:
+            embeddings = GoogleGenerativeAIEmbeddings(
+                model="models/text-embedding-004", 
+                google_api_key=os.getenv("GEMINI_API_KEY_1")
+            )
+            
+            vectorstore = PineconeVectorStore(
+                index_name=os.getenv("PINECONE_INDEX_NAME", "ace-bot-index"),
+                embedding=embeddings,
+                namespace=session_id
+            )
 
-        if docs_context:
-            docs_context = "\nREFERENCE MATERIALS (The user has uploaded these files. You CAN read them. The full text is provided here):\n" + docs_context
+            # Similarity search: pull the top 4 most relevant chunks
+            retrieved_docs = vectorstore.similarity_search(user_message, k=4)
+            
+            if retrieved_docs:
+                docs_context = "\nREFERENCE MATERIALS (Retrieved via Vector Search):\n"
+                for i, doc in enumerate(retrieved_docs):
+                    docs_context += f"--- Excerpt {i+1} ---\n{doc.page_content}\n\n"
+                    
+        except Exception as e:
+            print(f"RAG Retrieval Error: {e}")
 
         # Gemini prompt with strict rules for the tutoring system 
         gemini_prompt = (
             "You are FELIX, a helpful AI study tutor.\n"
             "Your goal is to help students deeply understand and apply academic concepts, not just recall them.\n\n"
             "CRITICAL INSTRUCTION: You DO have the ability to read and analyze documents. "
-            "If the user uploaded a document, its entire text is provided below in the REFERENCE MATERIALS section. "
+            "If the user uploaded a document, its relevant excerpts are provided below in the REFERENCE MATERIALS section. "
             "NEVER say 'I don't have the ability to view files' or 'I am a text-based AI'. "
             "If the user asks 'what is this document about', read the Reference Materials and provide a detailed summary.\n\n"
             "Follow these steps carefully for each question:\n"
@@ -370,9 +404,6 @@ def chat_audio(session_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 
 @chat_bp.route('/chat/clear-memory', methods=['POST'])
 def clear_memory():
@@ -394,11 +425,12 @@ def clear_memory():
         for d in docs:
             d.reference.delete()
             
-        # Delete context (the uploaded files)
-        context_ref = db.collection("users").document(uid).collection("chat_sessions").document(session_id).collection("context")
-        c_docs = context_ref.stream()
-        for c in c_docs:
-            c.reference.delete()
+        # Delete Vector Database Namespace
+        try:
+            from extensions import pinecone_index
+            pinecone_index.delete(delete_all=True, namespace=session_id)
+        except Exception as e:
+            print(f"Failed to clear Pinecone namespace: {e}")
 
         return jsonify({"ok": True, "message": f"Memory cleared for session {session_id}"})
     except Exception as e:
