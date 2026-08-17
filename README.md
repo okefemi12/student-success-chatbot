@@ -151,11 +151,17 @@ If deploying manually:
 | Variable               | Description                                     |
 | ---------------------- | ----------------------------------------------- |
 | `FIREBASE_CREDENTIALS` | Path or JSON credentials for Firestore          |
+| `PINECONE_API_KEY`     | API key for Vector Database storage             |
+| `PINECONE_INDEX_NAME`  | Name of your Pinecone Index                     |
 | `CLOUDINARY_URL`       | Cloudinary API connection URL                   |
+| `GROQ_API_KEY`         | Whisper STT and Backup LLM key                  |
+| `ACE_VOICE`            | Primary TTS Audio key                           |
 | `JWT_SECRET`           | Secret key for JWT authentication               |
 | `OPENAI_API_KEY`       | (Optional) For OpenAI or LangChain integrations |
 | `PORT`                 | Port (Render sets this automatically)           |
 
+
+(Note: The system utilizes an array of backup API keys to guarantee 99.9% uptime).
 ---
 
 ## 🧠 Model Info
@@ -186,10 +192,9 @@ Make sure this file is available when deploying (it’s included via `.dockerign
 
 ## 🧰 Tech Stack
 
-* **Backend:** Flask (Python)
-* **Database:** Firestore (Firebase)
+* **Backend:** Flask, Python
+* **Infrastructure::** Docker, Gunicorn, Render
 * **Storage:** Cloudinary
-* **ML / AI:** Scikit-learn, LangChain, OpenAI, Gemini, XGBOOST Classifier
-* **OCR:** PyMuPDF, Pytesseract
+* **ML / AI:** Scikit-learn, XGBoost Classifier, LangChain, Gemini text-embedding-004, Groq
+* **OCR & Audio:** PyMuPDF, Pytesseract, Whisper (STT)
 * **Deployment:** Render + Docker , Cloud(soon)
-
